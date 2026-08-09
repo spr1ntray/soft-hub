@@ -1,0 +1,503 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soft-hub.local/schemas/plugin-v1.json",
+  "title": "Soft Hub plugin manifest",
+  "$defs": {
+    "optionUi": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "group": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "order": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "control": { "enum": ["input", "textarea"] },
+        "placeholder": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "advanced": { "type": "boolean" },
+        "enum_labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 120 }
+        }
+      }
+    },
+    "optionField": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["boolean", "string", "integer", "number"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "default": {},
+        "enum": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "minimum": { "type": "number" },
+        "maximum": { "type": "number" },
+        "multipleOf": { "type": "number", "exclusiveMinimum": 0 },
+        "minLength": { "type": "integer", "minimum": 0, "maximum": 16000 },
+        "maxLength": { "type": "integer", "minimum": 0, "maximum": 16000 },
+        "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "x-ui": { "$ref": "#/$defs/optionUi" }
+      }
+    },
+    "optionsSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "object" },
+        "properties": {
+          "type": "object",
+          "maxProperties": 40,
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+          "properties": {
+            "account_concurrency": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "title", "description", "default", "minimum", "maximum", "multipleOf", "x-ui"],
+              "properties": {
+                "type": { "const": "integer" },
+                "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+                "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+                "default": { "type": "integer", "minimum": 1, "maximum": 20 },
+                "minimum": { "const": 1 },
+                "maximum": { "type": "integer", "minimum": 1, "maximum": 20 },
+                "multipleOf": { "const": 1 },
+                "x-ui": { "$ref": "#/$defs/optionUi" }
+              }
+            }
+          },
+          "additionalProperties": { "$ref": "#/$defs/optionField" }
+        },
+        "required": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" }
+        },
+        "additionalProperties": { "const": false }
+      }
+    },
+    "referralContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "parent_required", "parent_access", "permissions", "resources"],
+      "properties": {
+        "mode": { "const": "project_runtime" },
+        "parent_required": { "type": "boolean" },
+        "parent_access": { "enum": ["shared_read", "exclusive"] },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secrets"],
+          "properties": {
+            "secrets": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "enum": ["evm_private_key", "proxy", "email", "email_password", "twitter", "adspower_profile"] }
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["account"],
+          "properties": {
+            "account": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "enum": ["private_key", "proxy", "email", "email_password", "twitter", "adspower_profile"] }
+            }
+          }
+        }
+      }
+    },
+    "outputColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "title", "type"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "type": {
+          "enum": ["string", "integer", "number", "decimal_string", "boolean"]
+        },
+        "aggregate": { "enum": ["sum", "avg", "min", "max"] }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["aggregate"] },
+          "then": {
+            "properties": {
+              "type": { "enum": ["integer", "number", "decimal_string"] }
+            }
+          }
+        }
+      ]
+    },
+    "outputContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "title", "primary_kind", "columns"],
+      "properties": {
+        "mode": { "const": "account_table" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "primary_kind": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{0,79}$"
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/$defs/outputColumn" },
+          "contains": { "type": "object", "required": ["aggregate"] },
+          "minContains": 0,
+          "maxContains": 4
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "description",
+    "runtime",
+    "permissions",
+    "actions"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schema_version": { "const": 1 },
+    "contract_version": { "enum": ["SH-SOFTWARE-0.6/2", "SH-SOFTWARE-0.6/3"] },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$",
+      "maxLength": 96
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "description": { "type": "string", "maxLength": 500 },
+    "author": { "type": "string", "maxLength": 120 },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["display_name", "description", "assets"],
+      "properties": {
+        "display_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "assets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["icon", "image"],
+          "properties": {
+            "icon": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            },
+            "image": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            }
+          }
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hub": { "type": "string" },
+        "python": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "os": {
+          "type": "array",
+          "items": { "enum": ["darwin", "win32", "linux"] },
+          "uniqueItems": true
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "entrypoint", "protocol", "state_model"],
+      "properties": {
+        "type": { "const": "python" },
+        "entrypoint": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "protocol": { "const": "soft-hub-jsonl/1" },
+        "state_model": {
+          "enum": ["stateless", "resumable", "externally_reconciled"]
+        },
+        "requirements": { "type": "string", "minLength": 1, "pattern": "^[^/\\\\].*" },
+        "safe_stop": { "type": "boolean" },
+        "heartbeat_seconds": { "type": "integer", "minimum": 5, "maximum": 300 }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secrets", "network", "chains", "financial_risk"],
+      "properties": {
+        "secrets": {
+          "type": "array",
+          "items": {
+            "enum": ["evm_private_key", "proxy", "email", "email_password", "twitter", "adspower_profile", "capsolver_api_key", "adspower_api_key"]
+          },
+          "uniqueItems": true
+        },
+        "network": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 253 },
+          "uniqueItems": true
+        },
+        "chains": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "uniqueItems": true
+        },
+        "financial_risk": { "enum": ["none", "testnet", "mainnet"] },
+        "browser": { "type": "boolean" },
+        "local_services": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "description", "risk", "account_mode"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "description": { "type": "string", "maxLength": 300 },
+          "risk": { "enum": ["read", "external_write", "testnet_write", "mainnet_write"] },
+          "account_mode": { "enum": ["none", "one_or_more"] },
+          "confirmation_phrase": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "\\S"
+          },
+          "permissions": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["secrets"],
+            "properties": {
+              "secrets": {
+                "type": "array",
+                "items": {
+                  "enum": ["evm_private_key", "proxy", "email", "email_password", "twitter", "adspower_profile", "capsolver_api_key", "adspower_api_key"]
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["account", "settings"],
+            "properties": {
+              "account": {
+                "type": "array",
+                "items": {
+                  "enum": ["private_key", "proxy", "email", "email_password", "twitter", "adspower_profile"]
+                },
+                "uniqueItems": true
+              },
+              "settings": {
+                "type": "array",
+                "items": { "enum": ["capsolver", "adspower_api"] },
+                "uniqueItems": true
+              }
+            }
+          },
+          "referral": { "$ref": "#/$defs/referralContract" },
+          "output": { "$ref": "#/$defs/outputContract" },
+          "options": { "$ref": "#/$defs/optionsSchema" }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "risk": { "const": "mainnet_write" } },
+              "required": ["risk"]
+            },
+            "then": { "required": ["confirmation_phrase"] },
+            "else": { "not": { "required": ["confirmation_phrase"] } }
+          },
+          {
+            "if": {
+              "properties": { "risk": { "enum": ["external_write", "testnet_write", "mainnet_write"] } },
+              "required": ["risk"]
+            },
+            "then": {
+              "properties": { "account_mode": { "const": "one_or_more" } }
+            }
+          }
+        ]
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accent": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "monogram": { "type": "string", "minLength": 1, "maxLength": 3 }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "contract_version": { "const": "SH-SOFTWARE-0.6/2" }
+        },
+        "required": ["contract_version"]
+      },
+      "then": {
+        "required": ["author", "presentation", "compatibility"],
+        "properties": {
+          "compatibility": { "required": ["hub", "python", "os"] },
+          "runtime": { "required": ["safe_stop", "heartbeat_seconds"] },
+          "actions": {
+            "items": {
+              "required": ["permissions", "resources", "options"],
+              "properties": {
+                "options": {
+                  "required": ["type", "properties", "required", "additionalProperties"],
+                  "properties": {
+                    "properties": {
+                      "additionalProperties": {
+                        "required": ["type", "title", "description", "x-ui"],
+                        "properties": {
+                          "x-ui": { "required": ["group", "order"] }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "actions": {
+            "contains": {
+              "type": "object",
+              "properties": { "risk": { "const": "mainnet_write" } },
+              "required": ["risk"]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "permissions": {
+            "properties": { "financial_risk": { "const": "mainnet" } }
+          }
+        }
+      },
+      "else": {
+        "if": {
+          "properties": {
+            "actions": {
+              "contains": {
+                "type": "object",
+                "properties": { "risk": { "const": "testnet_write" } },
+                "required": ["risk"]
+              }
+            }
+          }
+        },
+        "then": {
+          "properties": {
+            "permissions": {
+              "properties": { "financial_risk": { "const": "testnet" } }
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "permissions": {
+              "properties": { "financial_risk": { "const": "none" } }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "actions": {
+            "contains": {
+              "type": "object",
+              "properties": {
+                "risk": { "enum": ["testnet_write", "mainnet_write"] }
+              },
+              "required": ["risk"]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "permissions": {
+            "properties": { "chains": { "minItems": 1 } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "permissions": {
+            "properties": {
+              "secrets": {
+                "contains": {
+                  "enum": ["adspower_profile", "adspower_api_key"]
+                }
+              }
+            },
+            "required": ["secrets"]
+          }
+        },
+        "required": ["permissions"]
+      },
+      "then": {
+        "properties": {
+          "permissions": {
+            "properties": {
+              "browser": { "const": true },
+              "local_services": {
+                "contains": { "const": "adspower" }
+              }
+            },
+            "required": ["browser", "local_services"]
+          }
+        }
+      }
+    }
+  ]
+}

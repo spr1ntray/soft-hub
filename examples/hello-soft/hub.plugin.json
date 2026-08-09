@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "contract_version": "SH-SOFTWARE-0.6/3",
+  "id": "io.sprintray.hello",
+  "name": "Hello Soft",
+  "version": "1.1.0",
+  "description": "Безопасный эталонный модуль: показывает дружелюбные настройки, честный progress и structured results без сети и секретов.",
+  "author": "sprintray",
+  "presentation": {
+    "display_name": "Hello Soft",
+    "description": "Эталонный безопасный модуль Soft Hub: демонстрирует дружелюбные настройки запуска, честный progress, account lifecycle и структурированные результаты без сети и секретов.",
+    "assets": {
+      "icon": "assets/icon.png",
+      "image": "assets/cover.png"
+    }
+  },
+  "compatibility": {
+    "hub": ">=0.6.8",
+    "python": ">=3.12,<3.13",
+    "os": ["darwin"]
+  },
+  "runtime": {
+    "type": "python",
+    "entrypoint": "plugin.main:run",
+    "protocol": "soft-hub-jsonl/1",
+    "state_model": "stateless",
+    "requirements": "requirements.txt",
+    "safe_stop": true,
+    "heartbeat_seconds": 15
+  },
+  "permissions": {
+    "secrets": [],
+    "network": [],
+    "chains": [],
+    "financial_risk": "none",
+    "browser": false,
+    "local_services": []
+  },
+  "actions": [
+    {
+      "id": "healthcheck",
+      "name": "Проверить модуль",
+      "description": "Выполняет локальный self-check и сохраняет результат.",
+      "risk": "read",
+      "account_mode": "none",
+      "permissions": {
+        "secrets": []
+      },
+      "resources": {
+        "account": [],
+        "settings": []
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "steps": {
+            "type": "integer",
+            "title": "Количество проверок",
+            "description": "Сколько локальных компонентов проверить в этом запуске.",
+            "minimum": 2,
+            "maximum": 12,
+            "default": 5,
+            "x-ui": {
+              "group": "Основные параметры",
+              "order": 10,
+              "unit": "шагов"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "profile_preview",
+      "name": "Проверить профили",
+      "description": "Выводит только публичные ID, labels и EVM addresses.",
+      "risk": "read",
+      "account_mode": "one_or_more",
+      "permissions": {
+        "secrets": []
+      },
+      "resources": {
+        "account": [],
+        "settings": []
+      },
+      "output": {
+        "mode": "account_table",
+        "title": "Проверка публичных профилей",
+        "primary_kind": "profile_preview",
+        "columns": [
+          {
+            "key": "fields_checked",
+            "title": "Проверено полей",
+            "type": "integer",
+            "aggregate": "sum"
+          },
+          {
+            "key": "profile_ready",
+            "title": "Профиль готов",
+            "type": "boolean"
+          },
+          {
+            "key": "network_used",
+            "title": "Использована сеть",
+            "type": "boolean"
+          }
+        ]
+      },
+      "options": {
+        "type": "object",
+        "properties": {
+          "account_concurrency": {
+            "type": "integer",
+            "title": "Параллельные аккаунты",
+            "description": "Сколько профилей модуль проверяет одновременно.",
+            "minimum": 1,
+            "maximum": 20,
+            "multipleOf": 1,
+            "default": 5,
+            "x-ui": {
+              "group": "Выполнение",
+              "order": 0,
+              "unit": "аккаунтов"
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "ui": {
+    "accent": "#5A7467",
+    "monogram": "HS"
+  }
+}

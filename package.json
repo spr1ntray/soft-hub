@@ -1,0 +1,84 @@
+{
+  "name": "soft-hub",
+  "productName": "Soft Hub",
+  "version": "0.6.11",
+  "description": "Локальный хаб для запуска и контроля Python-софтов",
+  "author": "sprintray",
+  "private": true,
+  "main": "electron/main.cjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "hub": "python3 -m soft_hub",
+    "desktop": "electron electron/main.cjs",
+    "runtime:prepare": "python3 scripts/prepare_runtime.py --target host",
+    "runtime:prepare:mac": "python3 scripts/prepare_runtime.py --target darwin-arm64",
+    "runtime:prepare:win": "python3 scripts/prepare_runtime.py --target win32-x64",
+    "build:example": "python3 scripts/build_plugin.py examples/hello-soft build/examples/hello-soft-1.1.0.softhub.zip",
+    "test": "python3 -m unittest discover -s tests -v",
+    "typecheck": "python3 scripts/check_python_syntax.py && node --check soft_hub/static/app.js && node --check electron/main.cjs && node --check scripts/verify_desktop_runtime.cjs",
+    "release:clean": "python3 scripts/clean_release_artifacts.py --after",
+    "dist:mac": "python3 scripts/clean_release_artifacts.py --before --platform mac && python3 scripts/prepare_runtime.py --target darwin-arm64 && python3 scripts/prepare_runtime.py --target darwin-arm64 --check && electron-builder --mac --arm64 --publish never && python3 scripts/clean_release_artifacts.py --after && python3 scripts/write_installer_checksums.py",
+    "dist:win": "python3 scripts/clean_release_artifacts.py --before --platform win && python3 scripts/prepare_runtime.py --target win32-x64 && python3 scripts/prepare_runtime.py --target win32-x64 --check && electron-builder --win --x64 --publish never && python3 scripts/clean_release_artifacts.py --after && python3 scripts/write_installer_checksums.py"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "io.sprintray.softhub",
+    "productName": "Soft Hub",
+    "directories": {
+      "output": "INSTALLERS"
+    },
+    "beforePack": "./scripts/verify_desktop_runtime.cjs",
+    "asar": true,
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "files": [
+      "electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/runtime/python",
+        "to": "python",
+        "filter": ["**/*"]
+      },
+      { "from": "schemas", "to": "schemas" },
+      {
+        "from": "docs",
+        "to": "docs",
+        "filter": ["USER_GUIDE_RU.md"]
+      }
+    ],
+    "mac": {
+      "icon": "assets/soft-hub-icon-v2.png",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "category": "public.app-category.productivity",
+      "target": [{ "target": "dmg", "arch": ["arm64"] }]
+    },
+    "dmg": {
+      "title": "Soft Hub ${version}",
+      "icon": "assets/soft-hub-icon-v2.png",
+      "iconSize": 112,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        { "x": 145, "y": 190, "type": "file" },
+        { "x": 395, "y": 190, "type": "link", "path": "/Applications" }
+      ]
+    },
+    "win": {
+      "icon": "assets/soft-hub-icon-v2.png",
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

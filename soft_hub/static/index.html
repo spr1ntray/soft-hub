@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ede8de" />
+    <title>Soft Hub</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body class="vault-entry-required">
+    <div class="ambient-scene" aria-hidden="true">
+      <span class="ambient-orb ambient-orb--blue"></span>
+      <span class="ambient-orb ambient-orb--coral"></span>
+      <span class="ambient-orbit ambient-orbit--wide"></span>
+      <span class="ambient-orbit ambient-orbit--small"></span>
+      <span class="ambient-flow"><i></i><i></i><i></i></span>
+    </div>
+    <div id="vault-entry-loader" class="vault-entry-loader" role="status" aria-live="polite">
+      <span class="vault-entry-loader-mark" aria-hidden="true"><img src="brand-icon.png" alt="" width="46" height="46" /></span>
+      <span><strong id="vault-entry-loader-title">Soft Hub</strong><small id="vault-entry-loader-copy">Открываем защищённый вход…</small></span>
+    </div>
+    <svg class="svg-sprite" aria-hidden="true">
+      <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.25"/><path d="M12 2.5v2M12 19.5v2M4.05 4.05l1.42 1.42M18.53 18.53l1.42 1.42M2.5 12h2M19.5 12h2M4.05 19.95l1.42-1.42M18.53 5.47l1.42-1.42"/></symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.2 15.35A8.7 8.7 0 0 1 8.65 3.8 8.7 8.7 0 1 0 20.2 15.35Z"/></symbol>
+      <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M19 8a7.5 7.5 0 1 0 .2 7.6M19 3v5h-5"/></symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="icon-play" viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></symbol>
+      <symbol id="icon-batch" viewBox="0 0 24 24"><rect x="4" y="5" width="11" height="11" rx="3"/><path d="M8 19h8a3 3 0 0 0 3-3V8M9.5 9v3l2.5-1.5Z"/></symbol>
+      <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M3.5 12h3.2l2.1-5.1 4.1 10.2 2.25-5.1h5.35"/></symbol>
+      <symbol id="icon-history" viewBox="0 0 24 24"><path d="M4 7v5h5M4.6 11.8A7.5 7.5 0 1 0 7 6.1"/><path d="M12 7.8V12l3 1.8"/></symbol>
+      <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M12 3.25 3.5 19h17Z"/><path d="M12 9v4.5M12 16.6v.05"/></symbol>
+      <symbol id="icon-import" viewBox="0 0 24 24"><path d="M12 3v11M8 10l4 4 4-4M5 18v2h14v-2"/></symbol>
+      <symbol id="icon-patch" viewBox="0 0 24 24"><path d="M8.25 4.5h7.5a3.75 3.75 0 0 1 3.75 3.75v7.5a3.75 3.75 0 0 1-3.75 3.75h-7.5a3.75 3.75 0 0 1-3.75-3.75v-7.5A3.75 3.75 0 0 1 8.25 4.5Z"/><path d="M12 8.5v7M8.5 12h7"/></symbol>
+      <symbol id="icon-vault" viewBox="0 0 24 24"><path d="M12 3.25 19 6v5.2c0 4.45-2.65 7.45-7 9.55-4.35-2.1-7-5.1-7-9.55V6Z"/><path d="M9.5 11.75 11.2 13.5l3.6-3.8"/></symbol>
+      <symbol id="icon-check" viewBox="0 0 24 24"><path d="m6.5 12.25 3.4 3.4 7.6-7.6"/></symbol>
+      <symbol id="icon-power" viewBox="0 0 24 24"><path d="M12 3v8M7.2 5.8a8 8 0 1 0 9.6 0"/></symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.75" cy="10.75" r="6.25"/><path d="m15.4 15.4 4.1 4.1"/></symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3.5v11M7.75 10.5 12 14.75l4.25-4.25M5 19.5h14"/></symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4.5h6V7M7.5 7l.7 12.5h7.6L16.5 7M10 10.5v5M14 10.5v5"/></symbol>
+      <symbol id="icon-browser" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M3.5 9h17M7 6.75h.05M10 6.75h.05"/><path d="M9 14h6M12 11v6"/></symbol>
+      <symbol id="icon-referral" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="11" cy="18" r="2.5"/><path d="m8.35 6.55 7.2.9M7.2 8.2l2.65 7.4M16.45 10.15l-3.9 5.7"/></symbol>
+      <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="4.5" y="10" width="15" height="10" rx="3"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10M12 14v2"/></symbol>
+      <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></symbol>
+      <symbol id="icon-force" viewBox="0 0 24 24"><path d="m13.6 2.9-7 10.25h5.15l-1.3 7.95 7-10.25H12.3Z"/></symbol>
+      <symbol id="icon-close" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></symbol>
+      <symbol id="icon-module-0" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.25"/><path d="M4.5 12c0-3.2 3.35-5.8 7.5-5.8s7.5 2.6 7.5 5.8-3.35 5.8-7.5 5.8S4.5 15.2 4.5 12Z"/><path d="M8.2 5.55c2.8-1.6 6.7.15 8.75 3.75s1.5 7.8-1.3 9.4"/></symbol>
+      <symbol id="icon-module-1" viewBox="0 0 24 24"><path d="M4 15.5c2.1 0 2.1-7 4.2-7s2.1 7 4.2 7 2.1-7 4.2-7 2.1 7 3.4 7"/><path d="M4 19h16"/></symbol>
+      <symbol id="icon-module-2" viewBox="0 0 24 24"><path d="M8 4.5H5.5v15H8M16 4.5h2.5v15H16"/><path d="m12 7 .9 2.25L15 10l-2.1.75L12 13l-.9-2.25L9 10l2.1-.75ZM15.8 14.4l.55 1.35 1.35.55-1.35.55-.55 1.35-.55-1.35-1.35-.55 1.35-.55Z"/></symbol>
+      <symbol id="icon-module-3" viewBox="0 0 24 24"><rect x="4.5" y="4.5" width="6" height="6" rx="1.5"/><rect x="13.5" y="4.5" width="6" height="6" rx="1.5"/><rect x="4.5" y="13.5" width="6" height="6" rx="1.5"/><path d="M16.5 13.5v6M13.5 16.5h6"/></symbol>
+      <symbol id="icon-module-4" viewBox="0 0 24 24"><circle cx="5" cy="7" r="1.5"/><circle cx="19" cy="17" r="1.5"/><path d="M6.5 7h3.3a3 3 0 0 1 3 3v4a3 3 0 0 0 3 3h1.7M8.5 17H7a2 2 0 0 1-2-2v-3"/></symbol>
+      <symbol id="icon-module-5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="m15.8 8.2-2.1 5.5-5.5 2.1 2.1-5.5Z"/><circle cx="12" cy="12" r=".8"/></symbol>
+    </svg>
+    <a class="skip-link" href="#main-workspace">Перейти к содержимому</a>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="window-space" aria-hidden="true"></div>
+        <a class="brand" href="#view-overview" data-view-trigger="overview" aria-label="Soft Hub — главная">
+          <span class="brand-mark" aria-hidden="true"><img src="brand-icon.png" alt="" width="42" height="42" /></span>
+          <span class="brand-copy"><strong>Soft Hub</strong><small>ЛОКАЛЬНЫЙ ЦЕНТР</small></span>
+        </a>
+
+        <nav class="navigation" aria-label="Основная навигация">
+          <span id="nav-line" class="nav-line" aria-hidden="true"></span>
+          <p class="nav-label">Центр управления</p>
+          <button class="nav-item is-active" type="button" data-view="overview" aria-label="Обзор" aria-current="page">
+            <span class="nav-index">01</span><span>Обзор</span><i data-nav-count="attention"></i>
+          </button>
+          <button class="nav-item" type="button" data-view="software" aria-label="Софты">
+            <span class="nav-index">02</span><span>Софты</span><i data-nav-count="modules"></i>
+          </button>
+          <button class="nav-item" type="button" data-view="accounts" aria-label="Аккаунты">
+            <span class="nav-index">03</span><span>Аккаунты</span><i data-nav-count="accounts"></i>
+          </button>
+          <button class="nav-item" type="button" data-view="results" aria-label="Результаты">
+            <span class="nav-index">04</span><span>Результаты</span>
+          </button>
+
+          <p class="nav-label nav-label--second">Система</p>
+          <button class="nav-item" type="button" data-view="patches" aria-label="Патчи">
+            <span class="nav-index">05</span><span>Патчи</span><i data-nav-count="patches"></i>
+          </button>
+          <button class="nav-item" type="button" data-view="settings" aria-label="Настройки">
+            <span class="nav-index">06</span><span>Настройки</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <button id="vault-quick" class="vault-state" type="button">
+            <span class="state-beacon"></span>
+            <span><strong id="vault-quick-title">Vault</strong><small id="vault-quick-detail">Проверяем…</small></span>
+          </button>
+          <div class="local-signature">
+            <span id="app-version">v—</span><span>by sprintray with love</span>
+          </div>
+        </div>
+      </aside>
+
+      <main id="main-workspace" class="workspace" tabindex="-1">
+        <header class="topbar">
+          <div class="page-heading">
+            <p id="page-kicker">ГЛАВНОЕ</p>
+            <h1 id="page-title" tabindex="-1">Обзор</h1>
+          </div>
+          <div class="top-actions">
+            <button id="refresh-button" class="icon-button" type="button" aria-label="Обновить данные" title="Обновить данные">
+              <svg class="hub-icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
+            </button>
+            <button id="theme-button" class="theme-switch" type="button" role="switch" aria-checked="false" aria-label="Включить тёмную тему" title="Переключить тему">
+              <span class="theme-switch-track" aria-hidden="true"><i class="theme-sun"><svg class="hub-icon"><use href="#icon-sun"></use></svg></i><span class="theme-switch-thumb"></span><i class="theme-moon"><svg class="hub-icon"><use href="#icon-moon"></use></svg></i></span>
+            </button>
+            <button class="button button--ink specular-button" type="button" data-install-trigger>
+              <svg class="hub-icon" aria-hidden="true"><use href="#icon-plus"></use></svg> Новый софт
+            </button>
+          </div>
+        </header>
+
+        <div class="content">
+          <section id="view-overview" class="view is-visible" aria-labelledby="page-title">
+            <div class="command-card border-glow reveal reveal--1">
+              <div class="command-symbol" aria-hidden="true"><img src="brand-icon.png" alt="" width="128" height="128" /></div>
+              <div class="command-copy">
+                <p>ВСЁ НА ЭТОМ КОМПЬЮТЕРЕ</p>
+                <h2 id="command-title" class="blur-text">Ваши софты в одном окне.</h2>
+                <span id="command-detail">Приватники и пароли остаются на этом компьютере. Софт получает только те данные, которые нужны ему для запуска.</span>
+              </div>
+              <div class="command-actions">
+                <span class="live-pill"><i></i><span id="live-pill-text">Система готова</span></span>
+                <button class="button button--acid specular-button" type="button" data-view-trigger="software">Открыть софты</button>
+              </div>
+            </div>
+
+            <div id="metric-grid" class="metric-grid reveal reveal--2">
+              <article class="metric-card"><span>Софты</span><strong id="metric-modules">—</strong><small>готовы к запуску</small></article>
+              <article class="metric-card"><span>Аккаунты</span><strong id="metric-accounts">—</strong><small>связки 1:1</small></article>
+              <article class="metric-card metric-card--accent"><span>Сейчас работают</span><strong id="metric-active">—</strong><small>параллельные задачи</small></article>
+              <article class="metric-card"><span>Результаты</span><strong id="metric-results">—</strong><small>в общей истории</small></article>
+            </div>
+
+            <article id="overview-onboarding" class="onboarding-panel panel reveal reveal--3" hidden>
+              <div class="onboarding-copy"><p>ПЕРВЫЙ ЗАПУСК</p><h3>Давайте быстро настроим Hub</h3><span>Всего четыре шага. Готовые пункты Hub запомнит сам.</span></div>
+              <ol class="onboarding-steps">
+                <li data-onboarding-step="vault"><i>01</i><span><strong>Создать Vault</strong><small>Локальное шифрование</small></span><b></b></li>
+                <li data-onboarding-step="accounts"><i>02</i><span><strong>Импортировать аккаунты</strong><small>Таблица 1:1</small></span><b></b></li>
+                <li data-onboarding-step="modules"><i>03</i><span><strong>Установить патч</strong><small>С компьютера или GitHub</small></span><b></b></li>
+                <li data-onboarding-step="run"><i>04</i><span><strong>Первый запуск</strong><small>С проверкой перед стартом</small></span><b></b></li>
+              </ol>
+              <button id="onboarding-action" class="button button--acid specular-button" type="button">Продолжить настройку</button>
+            </article>
+
+            <div class="dashboard-grid reveal reveal--3">
+              <article class="panel panel--operations">
+                <div class="panel-head">
+                  <div><p>ЗАПУСКИ</p><h3>Последние запуски</h3></div>
+                  <button class="text-button" type="button" data-activity-open="active" aria-controls="activity-panel" aria-expanded="false">Открыть операции →</button>
+                </div>
+                <div id="overview-runs" class="run-list compact-list"></div>
+              </article>
+
+              <article class="panel panel--fleet">
+                <div class="panel-head">
+                  <div><p>СОФТЫ</p><h3>Состояние софтов</h3></div>
+                  <span id="fleet-score" class="score-ring">—</span>
+                </div>
+                <div id="overview-modules" class="fleet-list"></div>
+              </article>
+            </div>
+
+            <div id="attention-banner" class="attention-banner reveal reveal--4" hidden>
+              <span class="attention-mark">!</span>
+              <div><strong>Есть запуски, которые нужно проверить</strong><small>Некоторые из них закончились с неясным результатом. Откройте журнал и проверьте их перед повтором.</small></div>
+              <button class="button button--quiet" type="button" data-activity-open="attention" aria-controls="activity-panel" aria-expanded="false">Проверить</button>
+            </div>
+          </section>
+
+          <section id="view-software" class="view">
+            <div class="section-intro">
+              <div><p class="section-kicker">МОИ СОФТЫ</p><h2>Ваша библиотека софтов</h2><span>Здесь все установленные софты. Добавляйте их с компьютера или GitHub, запускайте и обновляйте.</span></div>
+              <button class="button button--ink specular-button" type="button" data-install-trigger>Установить пакет</button>
+            </div>
+            <div id="software-batch-bar" class="software-batch-bar" aria-live="polite">
+              <span class="batch-bar-icon" aria-hidden="true"><svg class="hub-icon"><use href="#icon-batch"></use></svg></span>
+              <div><strong id="batch-selection-title">Пакетный запуск</strong><small id="batch-selection-copy">Отметьте нужные софты — проверим их и запустим одной пачкой.</small></div>
+              <button id="batch-select-ready" class="text-button" type="button">Выбрать готовые</button>
+              <button id="batch-clear" class="text-button" type="button" hidden>Снять выбор</button>
+              <button id="batch-open-button" class="button button--acid" type="button" disabled><svg class="hub-icon" aria-hidden="true"><use href="#icon-play"></use></svg><span>Запустить выбранные</span></button>
+            </div>
+            <div id="software-grid" class="software-grid animated-list"></div>
+          </section>
+
+          <section id="view-accounts" class="view">
+            <div class="section-intro">
+              <div><p class="section-kicker">АККАУНТЫ</p><h2>Аккаунты и расходники</h2><span>Одна строка — один аккаунт: кошелёк, HTTP-прокси, почта, Twitter и профиль AdsPower.</span></div>
+              <div class="section-actions">
+                <button id="export-accounts-button" class="button button--quiet" type="button">Экспорт</button>
+                <button id="vault-lock-button" class="button button--quiet" type="button">Заблокировать</button>
+                <button id="import-accounts-button" class="button button--ink" type="button">Импортировать</button>
+              </div>
+            </div>
+            <div class="privacy-strip">
+              <span class="privacy-lock" aria-hidden="true">◆</span>
+              <div><strong>AES-256-GCM · scrypt</strong><small>В таблице секреты скрыты. Для открытого экспорта снова понадобится мастер-пароль и отдельное подтверждение.</small></div>
+              <span id="vault-chip" class="status-chip">Проверяем</span>
+            </div>
+            <div class="account-capability-grid">
+              <article class="account-capability account-capability--browser">
+                <span class="capability-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-browser"></use></svg></span>
+                <div class="capability-copy"><p>БРАУЗЕР</p><h3>AdsPower Local API</h3><span>API-ключ один на весь Hub. ID профиля AdsPower задаётся отдельно для каждого аккаунта.</span></div>
+                <form id="adspower-form" class="capability-secret-form">
+                  <label for="adspower-key" class="sr-only">Общий AdsPower Local API key</label>
+                  <input id="adspower-key" type="password" minlength="4" autocomplete="off" spellcheck="false" placeholder="Вставьте общий API key" />
+                  <button id="adspower-save" class="button button--ink" type="submit">Сохранить</button>
+                  <button id="adspower-clear" class="button button--quiet" type="button">Удалить</button>
+                </form>
+                <span id="adspower-status" class="setting-value capability-status">Проверяем</span>
+              </article>
+              <article class="account-capability account-capability--referrals">
+                <span class="capability-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-referral"></use></svg></span>
+                <div class="capability-copy"><p>РЕФЕРАЛЬНАЯ КАРТА</p><h3>Цепочка аккаунтов</h3><span>Здесь достаточно указать, кто кого пригласил. Нужный код софт получит и подставит сам.</span></div>
+                <div class="capability-actions"><span id="referral-network-status" class="setting-value">Нет связей</span><button id="referral-open-button" class="button button--quiet" type="button">Настроить цепочку</button></div>
+              </article>
+            </div>
+            <div class="table-panel">
+              <div class="table-tools">
+                <label class="search-field"><span aria-hidden="true">⌕</span><input id="account-search" type="search" aria-label="Найти аккаунт по названию или адресу" placeholder="Найти по названию или адресу" autocomplete="off" /></label>
+                <span id="account-count-label">0 аккаунтов</span>
+              </div>
+              <div class="data-table-wrap">
+                <table class="data-table">
+                  <thead><tr><th>Аккаунт</th><th>EVM-адрес</th><th>Прокси</th><th>Почта</th><th>Twitter</th><th>AdsPower</th><th>Кто пригласил</th><th></th></tr></thead>
+                  <tbody id="accounts-table"></tbody>
+                </table>
+              </div>
+              <div id="accounts-empty" class="empty-state" hidden>
+                <span class="empty-glyph">03</span><h3>Аккаунтов пока нет</h3><p>Вставьте таблицу из Excel или Sheets либо загрузите CSV. Перед сохранением Hub проверит каждую строку.</p>
+                <button class="button button--acid" type="button" data-import-trigger>Добавить аккаунты</button>
+              </div>
+              <div id="accounts-locked" class="accounts-locked" hidden>
+                <span aria-hidden="true"><svg class="hub-icon"><use href="#icon-lock"></use></svg></span>
+                <div><h3>Vault заблокирован</h3><p>Аккаунты скрыты. Введите мастер-пароль, чтобы открыть их в этой сессии.</p></div>
+                <button class="button button--ink" type="button" data-unlock-vault>Разблокировать</button>
+              </div>
+            </div>
+          </section>
+
+          <section id="view-results" class="view">
+            <div class="section-intro">
+              <div><p class="section-kicker">ИТОГИ</p><h2>Результаты</h2><span>Здесь можно нормально разобрать парсинг: выбрать запуск, отфильтровать кошельки, посмотреть все показатели и скачать таблицу.</span></div>
+            </div>
+            <article id="result-report-workbench" class="result-report-workbench panel border-glow" aria-labelledby="result-report-title">
+              <header class="result-report-head">
+                <span class="result-report-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-search"></use></svg></span>
+                <div><p>СТАТИСТИКА КОШЕЛЬКОВ</p><h3 id="result-report-title">Отчёт парсинга</h3><span id="result-report-copy">Выберите готовый запуск — Hub соберёт показатели по всем аккаунтам в одну таблицу.</span></div>
+                <button id="result-report-refresh" class="button button--quiet" type="button">Обновить отчёты</button>
+              </header>
+              <div class="result-report-controls">
+                <label class="result-report-field result-report-field--run"><span>СОФТ И ЗАПУСК</span><select id="result-report-select" aria-label="Выбрать отчёт парсинга"><option value="">Пока нет отчётов</option></select></label>
+                <label class="result-report-field"><span>ПОИСК</span><input id="result-report-search" type="search" placeholder="Аккаунт, адрес или значение" autocomplete="off" /></label>
+                <label class="result-report-field result-report-field--status"><span>СТАТУС</span><select id="result-report-status"><option value="all">Все кошельки</option><option value="succeeded">Успешно</option><option value="partial">Частично</option><option value="attention">Нужно проверить</option><option value="missing">Нет результата</option></select></label>
+                <button id="result-report-export" class="button button--ink specular-button" type="button" disabled>Скачать CSV</button>
+              </div>
+              <div id="result-report-state" class="result-report-state" role="status" aria-live="polite">
+                <span class="empty-glyph">••</span><h3>Собираем список отчётов</h3><p>Это займёт пару секунд.</p>
+              </div>
+              <div id="result-report-content" class="result-report-content" hidden>
+                <div id="result-report-summary" class="result-report-summary"></div>
+                <div class="result-report-table-shell">
+                  <div class="result-report-table-head"><div><strong id="result-report-table-title">Кошельки</strong><span id="result-report-visible-count" role="status" aria-live="polite">0 строк</span></div><small id="result-report-table-note">Hub оставляет только объявленные поля и повторно скрывает известные секреты. Перед передачей CSV всё равно проверьте файл.</small></div>
+                  <div class="result-report-table-scroll" tabindex="0" role="region" aria-label="Таблица статистики кошельков" aria-describedby="result-report-table-note"><table class="result-report-table"><caption class="sr-only">Статистика выбранного запуска по каждому кошельку</caption><thead id="result-report-table-head"></thead><tbody id="result-report-table-body"></tbody></table></div>
+                </div>
+              </div>
+            </article>
+            <div class="result-history-heading"><div><p class="section-kicker">ИСТОРИЯ</p><h3>Все результаты по софтам</h3></div><span>Обычные итоги никуда не делись — они собраны ниже по каждому софту.</span></div>
+            <div id="results-list" class="results-list"></div>
+          </section>
+
+          <section id="view-patches" class="view">
+            <div class="section-intro">
+              <div><p class="section-kicker">ПАТЧИ</p><h2>Патчи и перенос софтов</h2><span>Добавьте пакет с компьютера или GitHub. Перед установкой Hub проверит структуру и контрольные суммы.</span></div>
+            </div>
+            <article class="patch-radar panel border-glow">
+              <svg class="patch-radar-orbit" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+                <circle class="patch-radar-ring patch-radar-ring--outer" cx="50" cy="50" r="48"></circle>
+                <circle class="patch-radar-ring" cx="50" cy="50" r="33"></circle>
+                <circle class="patch-radar-ring" cx="50" cy="50" r="17"></circle>
+                <path class="patch-radar-axis" d="M50 2v96M2 50h96"></path>
+                <g class="patch-radar-sweep">
+                  <path class="patch-radar-sweep-field" d="M50 50 91 25A48 48 0 0 1 98 50Z"></path>
+                  <line x1="50" y1="50" x2="91" y2="25"></line>
+                </g>
+                <g class="patch-radar-blips" data-patch-radar-blips>
+                  <circle class="patch-radar-blip" cx="28" cy="28" r="2.4"></circle>
+                  <circle class="patch-radar-blip" cx="66" cy="31" r="2.1"></circle>
+                  <circle class="patch-radar-blip" cx="73" cy="62" r="2.6"></circle>
+                  <circle class="patch-radar-blip" cx="42" cy="72" r="2.2"></circle>
+                  <circle class="patch-radar-blip" cx="27" cy="56" r="2.5"></circle>
+                </g>
+                <circle class="patch-radar-center" cx="50" cy="50" r="3"></circle>
+              </svg>
+              <div class="patch-radar-copy">
+                <p>РАДАР GITHUB</p>
+                <h3>Лента ваших <code>*.patch</code> репозиториев</h3>
+                <span>Hub найдёт ваши открытые репозитории с окончанием <code>.patch</code> и покажет свежие пакеты.</span>
+              </div>
+              <form id="patch-feed-form" class="patch-feed-form">
+                <label for="patch-feed-owner" class="sr-only">Имя пользователя GitHub или ссылка на профиль</label>
+                <input id="patch-feed-owner" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="spr1ntray или https://github.com/spr1ntray" />
+                <button id="patch-feed-scan-button" class="button button--ink specular-button" type="submit">Сканировать</button>
+              </form>
+              <div class="patch-radar-meta"><span id="patch-feed-status" role="status" aria-live="polite">Профиль не подключён</span><small>Открытый GitHub · последние релизы · только пакеты .softhub</small></div>
+            </article>
+            <div id="patch-feed-grid" class="patch-feed-grid" hidden></div>
+            <div class="patch-layout">
+              <div class="install-stack">
+                <article id="drop-zone" class="drop-zone border-glow">
+                  <input id="plugin-file-input" type="file" accept=".zip,.softhub,application/zip" hidden />
+                  <span class="drop-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+                  <p>ПАКЕТ С КОМПЬЮТЕРА</p>
+                  <h3>Перетащите <code>.softhub.zip</code></h3>
+                  <span>или выберите файл на компьютере · до 256 МБ</span>
+                  <button class="button button--acid specular-button" type="button">Выбрать пакет</button>
+                </article>
+                <article class="github-install panel border-glow">
+                  <div class="github-install-copy"><p>РЕЛИЗ GITHUB</p><h3>Установить по ссылке</h3><span>Вставьте ссылку на репозиторий, релиз или готовый файл из открытого релиза.</span></div>
+                  <form id="github-install-form" class="github-install-form">
+                    <label for="github-url" class="sr-only">GitHub URL</label>
+                    <input id="github-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" required placeholder="https://github.com/owner/repository" />
+                    <button id="github-install-button" class="button button--ink specular-button" type="submit">Скачать и установить</button>
+                  </form>
+                  <small>Работают только открытые ссылки GitHub по HTTPS. Приватные репозитории пока не поддерживаются.</small>
+                </article>
+              </div>
+              <article class="patch-rules panel border-glow">
+                <div class="panel-head"><div><p>ПРОВЕРКА ПАКЕТА</p><h3>Что проверит Hub</h3></div><span class="pipeline-state">ЛОКАЛЬНО</span></div>
+                <ol class="pipeline-list">
+                  <li><span>01</span><div><strong>Безопасный архив</strong><small>Внутри нет опасных ссылок, выходов из папки и конфликтующих путей</small></div></li>
+                  <li><span>02</span><div><strong>Описание пакета</strong><small>Версия Hub подходит, а действия и доступы описаны</small></div></li>
+                  <li><span>03</span><div><strong>SHA-256 каждого файла</strong><small>Все файлы перечислены и совпадают с контрольными суммами</small></div></li>
+                  <li><span>04</span><div><strong>Надёжная установка</strong><small>Новая версия включится только после полной проверки пакета</small></div></li>
+                </ol>
+              </article>
+            </div>
+          </section>
+
+          <section id="view-settings" class="view">
+            <div class="section-intro"><div><p class="section-kicker">НАСТРОЙКИ</p><h2>Настройки</h2><span>Здесь версия Hub, хранилище, ключи и общие правила запуска.</span></div></div>
+            <div class="settings-grid">
+              <article class="setting-card setting-card--update">
+                <span class="setting-index">UP</span>
+                <div class="setting-update-copy">
+                  <div class="setting-update-head"><h3>Обновление Hub</h3><span id="settings-app-version">v…</span></div>
+                  <p>Новая версия ставится поверх текущей. Vault, аккаунты, софты, история и результаты лежат отдельно — установщик их не тронет.</p>
+                  <details id="core-update-guide" class="core-update-guide">
+                    <summary><svg class="hub-icon" aria-hidden="true"><use href="#icon-download"></use></svg><span>Как перейти на новую версию</span></summary>
+                    <div class="core-update-steps">
+                      <span><b>1</b><span><strong>Закончите работу</strong><small>Дождитесь запусков и закройте всё, что требует сверки.</small></span></span>
+                      <span><b>2</b><span><strong>Закройте Hub</strong><small>Заблокируйте Vault и полностью завершите приложение.</small></span></span>
+                      <span><b>3</b><span><strong>Поставьте поверх</strong><small id="settings-update-platform">Откройте новый установщик и замените текущую версию.</small></span></span>
+                    </div>
+                    <p class="core-update-note"><strong>Не удаляйте старую базу вручную.</strong> После запуска проверьте версию. Если рядом с софтом появится «Подготовить», нажмите один раз — его данные останутся на месте.</p>
+                  </details>
+                </div>
+                <span class="setting-value setting-update-mode">РУЧНОЕ ОБНОВЛЕНИЕ</span>
+              </article>
+              <article class="setting-card"><span class="setting-index">01</span><div><h3>Vault</h3><p id="settings-vault-copy">Проверяем состояние хранилища.</p></div><button id="settings-vault-action" class="button button--quiet" type="button">Открыть</button></article>
+              <article class="setting-card setting-card--secret"><span class="setting-index">02</span><div><h3>Capsolver</h3><p>Один ключ для всех софтов с Capsolver. Он хранится в Vault и выдаётся только тем, кому действительно нужен.</p><form id="capsolver-form" class="inline-secret-form"><label for="capsolver-key" class="sr-only">API-ключ Capsolver</label><input id="capsolver-key" type="password" minlength="4" autocomplete="off" spellcheck="false" placeholder="Введите новый API-ключ" /><button id="capsolver-save" class="button button--ink" type="submit">Сохранить</button><button id="capsolver-clear" class="button button--quiet" type="button">Удалить</button></form></div><span id="capsolver-status" class="setting-value">НЕ ДОБАВЛЕН</span></article>
+              <article class="setting-card"><span class="setting-index">03</span><div><h3>AdsPower и рефералы</h3><p>API-ключ AdsPower, ID профилей и реферальная карта находятся в разделе «Аккаунты».</p></div><button class="button button--quiet" type="button" data-open-account-connections>Открыть аккаунты</button></article>
+              <article class="setting-card"><span class="setting-index">04</span><div><h3>Изоляция</h3><p>Каждый софт запускается отдельно от остальных. Секреты передаются ему один раз через защищённый канал.</p></div><span class="setting-value">ОТДЕЛЬНО</span></article>
+              <article class="setting-card"><span class="setting-index">05</span><div><h3>Параллельность</h3><p>Hub не даст двум задачам одновременно менять один и тот же кошелёк в одной сети.</p></div><span class="setting-value">4 ЗАПУСКА</span></article>
+              <article class="setting-card setting-card--warning"><span class="setting-index">!</span><div><h3>Граница доверия</h3><p>Установленный софт работает с правами вашего пользователя. Добавляйте только свой код или пакеты, которым доверяете.</p></div><span class="setting-value">ВАЖНО</span></article>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <nav class="quick-dock" aria-label="Пульт операций">
+      <button class="dock-presence" type="button" data-activity-open="auto" aria-label="Открыть запуски: очередь свободна" aria-controls="activity-panel" aria-expanded="false"><span class="dock-vault-icon"><svg class="hub-icon" aria-hidden="true"><use href="#icon-activity"></use></svg><i id="dock-presence-dot"></i></span><span><small>ЗАПУСКИ</small><strong id="dock-presence-copy" aria-live="polite">Задач нет</strong></span></button>
+      <span class="dock-divider" aria-hidden="true"></span>
+      <button class="dock-primary" type="button" data-quick-action="batch" aria-label="Запустить выбранные софты" aria-describedby="dock-tooltip-batch"><svg class="hub-icon" aria-hidden="true"><use href="#icon-batch"></use></svg><span id="dock-tooltip-batch" class="dock-tooltip" role="tooltip"><strong>Пакетный запуск</strong><span>Запустить выбранные софты одной пачкой</span></span><i id="dock-run-count"></i></button>
+      <button type="button" data-quick-action="live" aria-label="Открыть текущие запуски" aria-describedby="dock-tooltip-live" aria-controls="activity-panel" aria-expanded="false"><svg class="hub-icon" aria-hidden="true"><use href="#icon-activity"></use></svg><span id="dock-tooltip-live" class="dock-tooltip" role="tooltip"><strong>Сейчас работают</strong><span>Посмотреть, что работает и как идёт запуск</span></span><i id="dock-live-count"></i></button>
+      <button type="button" data-quick-action="attention" aria-label="Открыть запуски, которые нужно проверить" aria-describedby="dock-tooltip-attention" aria-controls="activity-panel" aria-expanded="false"><svg class="hub-icon" aria-hidden="true"><use href="#icon-alert"></use></svg><span id="dock-tooltip-attention" class="dock-tooltip" role="tooltip"><strong>Нужно проверить</strong><span>Ошибки и запуски с неясным результатом</span></span><i id="dock-attention-count"></i></button>
+    </nav>
+
+    <aside id="activity-panel" class="activity-panel" aria-labelledby="activity-panel-title" aria-describedby="activity-panel-summary" tabindex="-1" hidden>
+      <header class="activity-panel-head">
+        <div class="activity-panel-heading"><span class="activity-signal" aria-hidden="true"><i></i><i></i><i></i></span><div><p>ЗАПУСКИ</p><h2 id="activity-panel-title">Текущие запуски</h2></div></div>
+        <button id="activity-panel-close" class="activity-panel-close" type="button" aria-label="Закрыть панель операций"><svg class="hub-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+      </header>
+      <div class="activity-panel-toolbar">
+        <div id="activity-panel-filters" class="activity-panel-filters" role="group" aria-label="Режим панели операций">
+          <button class="is-active" type="button" data-activity-filter="active" aria-pressed="true"><span>Сейчас</span><i id="activity-filter-active-count">0</i></button>
+          <button type="button" data-activity-filter="attention" aria-pressed="false"><span>Проверить</span><i id="activity-filter-attention-count">0</i></button>
+        </div>
+        <p id="activity-panel-summary" role="status" aria-live="polite">Очередь свободна</p>
+      </div>
+      <div class="activity-panel-body">
+        <div id="activity-table-wrap" class="activity-table-wrap">
+          <table id="activity-table" class="activity-table">
+            <caption class="sr-only">Операции, сгруппированные по софтам</caption>
+            <thead><tr><th scope="col">Софт</th><th scope="col">Аккаунт</th><th scope="col">Текущий этап</th><th scope="col">Прогресс</th><th scope="col">Состояние</th><th scope="col">Давность</th><th scope="col"><span class="sr-only">Детали</span></th></tr></thead>
+            <tbody id="activity-table-body"></tbody>
+          </table>
+        </div>
+        <div id="activity-panel-empty" class="activity-panel-state" data-state="empty" hidden><span aria-hidden="true"><svg class="hub-icon"><use href="#icon-check"></use></svg></span><div><strong id="activity-empty-title">Очередь свободна</strong><small id="activity-empty-copy">Ни один софт сейчас не работает.</small></div></div>
+        <div id="activity-panel-loading" class="activity-panel-state" data-state="loading" role="status" hidden><span class="activity-loading-mark" aria-hidden="true"><i></i><i></i><i></i></span><div><strong>Собираем статусы аккаунтов…</strong><small>Смотрим только служебные статусы — без секретов.</small></div></div>
+        <div id="activity-panel-unavailable" class="activity-panel-state" data-state="unavailable" hidden><span aria-hidden="true"><svg class="hub-icon"><use href="#icon-alert"></use></svg></span><div><strong>Операции пока недоступны</strong><small id="activity-unavailable-copy">Обновите данные и откройте панель ещё раз.</small></div><button id="activity-panel-refresh" class="button button--quiet" type="button">Обновить</button></div>
+      </div>
+      <footer class="activity-panel-foot"><span>«Скрыть» уберёт известную ошибку из уведомлений, но оставит её в истории. Перед сверкой Hub откроет журнал.</span><kbd>Esc</kbd></footer>
+    </aside>
+
+    <div id="modal-backdrop" class="modal-backdrop" hidden></div>
+
+    <section id="vault-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="vault-modal-title" aria-describedby="vault-modal-description" data-startup-required="false" hidden>
+      <div class="vault-entry-brand" aria-hidden="true">
+        <span><img src="brand-icon.png" alt="" width="48" height="48" /></span>
+        <div><strong>Soft Hub</strong><small>Локальный центр управления</small></div>
+      </div>
+      <button id="vault-modal-close" class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
+      <p id="vault-modal-kicker" class="modal-kicker">ЗАЩИЩЁННЫЙ ВХОД</p>
+      <h2 id="vault-modal-title">Разблокировать Vault</h2>
+      <p id="vault-modal-description">По этому паролю Hub откроет ключ шифрования только в памяти и нигде его не сохранит.</p>
+      <div class="vault-entry-points" aria-label="Как защищены данные">
+        <span>Только локально</span><span>AES-256-GCM</span><span>Без облака</span>
+      </div>
+      <form id="vault-form">
+        <label>Мастер-пароль<input id="vault-password" type="password" autocomplete="current-password" minlength="14" required placeholder="Не менее 14 символов" /></label>
+        <label id="vault-confirm-label" hidden>Повторите пароль<input id="vault-confirm" type="password" autocomplete="new-password" minlength="14" placeholder="Тот же пароль" /></label>
+        <p id="vault-error" class="form-error" role="alert" hidden></p>
+        <button id="vault-submit" class="button button--ink button--wide" type="submit">Разблокировать</button>
+      </form>
+      <small class="modal-footnote">Пароль не записывается в БД и не попадает в логи.</small>
+    </section>
+
+    <section id="import-modal" class="modal modal--wide" role="dialog" aria-modal="true" aria-labelledby="import-modal-title" hidden>
+      <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
+      <p class="modal-kicker">ИМПОРТ 1:1</p>
+      <h2 id="import-modal-title">Импорт аккаунтов</h2>
+      <p>Вставьте пять колонок из Excel или Google Sheets либо загрузите CSV/TSV.</p>
+      <form id="import-form">
+        <div class="table-import-card">
+          <div class="table-import-head"><div><strong>Таблица 1:1</strong><small>private_key · proxy · email · twitter · adspower_profile</small></div><button id="accounts-file-button" class="file-chip" type="button">Загрузить CSV</button><input id="accounts-file-input" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" hidden /></div>
+          <div class="column-ruler column-ruler--five" aria-hidden="true"><span>ПРИВАТНИК</span><span>HTTP-ПРОКСИ</span><span>ПОЧТА</span><span>TWITTER</span><span>ADSPOWER ID</span></div>
+          <label for="import-table" class="sr-only">Таблица аккаунтов</label>
+          <textarea id="import-table" rows="9" spellcheck="false" autocomplete="off" placeholder="0x…,192.0.2.10:8080:proxy-user:proxy-password,mail@example.com,@twitter,profile-demo-01"></textarea>
+        </div>
+        <details class="optional-import"><summary>Если удобнее: пять отдельных списков</summary><div class="import-columns import-columns--five">
+          <label><span>Приватники <i>нужно</i></span><textarea id="import-keys" rows="8" spellcheck="false" autocomplete="off" placeholder="0x…&#10;0x…"></textarea></label>
+          <label><span>HTTP-прокси <i>нужно</i></span><textarea id="import-proxies" rows="8" spellcheck="false" autocomplete="off" placeholder="192.0.2.10:8080:proxy-user:proxy-password"></textarea></label>
+          <label><span>Почты <i>нужно</i></span><textarea id="import-emails" rows="8" spellcheck="false" autocomplete="off" placeholder="name@example.com"></textarea></label>
+          <label><span>Twitter <i>можно пропустить</i></span><textarea id="import-twitters" rows="8" spellcheck="false" autocomplete="off" placeholder="@account"></textarea></label>
+          <label><span>ID AdsPower <i>можно пропустить</i></span><textarea id="import-adspower-profiles" rows="8" spellcheck="false" autocomplete="off" placeholder="profile-demo-01"></textarea></label>
+        </div></details>
+        <details class="optional-import"><summary>Ещё можно добавить пароли почт и названия аккаунтов</summary><div class="import-columns import-columns--two"><label><span>Пароли почт</span><textarea id="import-email-passwords" rows="4" autocomplete="off" spellcheck="false"></textarea></label><label><span>Названия аккаунтов</span><textarea id="import-labels" rows="4" autocomplete="off" placeholder="Wallet 01"></textarea></label></div></details>
+        <div class="import-summary"><span id="import-line-count">0 связок</span><small>Hub сохранит таблицу целиком. Если найдёт ошибку, не запишет ни одной строки.</small></div>
+        <p id="import-error" class="form-error" role="alert" hidden></p>
+        <button class="button button--ink button--wide" type="submit">Сохранить аккаунты в Vault</button>
+      </form>
+    </section>
+
+    <section id="export-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="export-modal-title" hidden>
+      <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
+      <p class="modal-kicker">ОТКРЫТЫЙ ЭКСПОРТ</p>
+      <h2 id="export-modal-title">Экспортировать аккаунты</h2>
+      <p>В XLSX все ячейки сохраняются как текст, поэтому Excel не запустит значения с <code>= + - @</code> как формулы. Но в файле будут открытые секреты — Vault его уже не защищает.</p>
+      <form id="export-form">
+        <label>Формат<select id="export-format"><option value="xlsx" selected>XLSX для Excel — советуем</option><option value="csv">CSV без защиты — только для импорта</option></select></label>
+        <label>Мастер-пароль<input id="export-password" type="password" autocomplete="current-password" minlength="14" required /></label>
+        <label>Введите <strong>EXPORT PLAINTEXT SECRETS</strong><input id="export-acknowledgement" type="text" autocomplete="off" spellcheck="false" required /></label>
+        <p id="export-error" class="form-error" role="alert" hidden></p>
+        <button id="export-submit" class="button button--danger button--wide" type="submit">Скачать файл с открытыми секретами</button>
+      </form>
+      <small class="modal-footnote">CSV подходит только для переноса в другой софт. Не открывайте его в Excel или Sheets: значения могут распознаться как формулы.</small>
+    </section>
+
+    <section id="referral-modal" class="modal modal--referrals" role="dialog" aria-modal="true" aria-labelledby="referral-modal-title" hidden>
+      <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
+      <p class="modal-kicker">КАРТА АККАУНТОВ</p>
+      <h2 id="referral-modal-title">Реферальная сеть</h2>
+      <p class="referral-modal-lead">Сверху — корни, ниже — те, кого они пригласили. Нажмите на аккаунт и выберите ему родителя. Реферальный код софт найдёт и подставит сам.</p>
+      <form id="referral-form" novalidate>
+        <div class="referral-toolbar">
+          <label class="search-field referral-search"><svg class="hub-icon" aria-hidden="true"><use href="#icon-search"></use></svg><input id="referral-search" type="search" autocomplete="off" placeholder="Найти аккаунт" aria-label="Найти аккаунт в реферальной сети" /></label>
+          <span id="referral-search-count" class="referral-search-count">0 аккаунтов</span>
+          <div class="referral-patterns" role="group" aria-label="Быстрые схемы сети">
+            <button class="button button--quiet" type="button" data-referral-pattern="linear">Одна цепь</button>
+            <button class="button button--quiet" type="button" data-referral-pattern="leader">Один корень</button>
+            <button class="button button--quiet" type="button" data-referral-pattern="reset">Все корни</button>
+          </div>
+        </div>
+        <div class="referral-workspace">
+          <section class="referral-graph-panel" aria-labelledby="referral-overview-title">
+            <header class="referral-graph-head">
+              <div><strong id="referral-overview-title">Реферальное дерево</strong><small id="referral-overview-copy">Схема сохранена</small></div>
+              <div class="referral-stats" aria-label="Статистика реферальной сети">
+                <span><strong id="referral-root-count">0</strong><small>корней</small></span>
+                <span><strong id="referral-link-count">0</strong><small>связей</small></span>
+                <span><strong id="referral-depth-count">0</strong><small>уровней</small></span>
+              </div>
+            </header>
+            <div id="referral-chain-preview" class="referral-chain-preview" aria-live="polite" aria-describedby="referral-map-help" tabindex="0">
+              <div id="referral-map-controls" class="referral-map-controls" role="group" aria-label="Масштаб и положение карты">
+                <button id="referral-zoom-out" type="button" aria-label="Уменьшить масштаб" title="Уменьшить масштаб">−</button>
+                <output id="referral-zoom-level" aria-live="polite" aria-label="Текущий масштаб">100%</output>
+                <button id="referral-zoom-in" type="button" aria-label="Увеличить масштаб" title="Увеличить масштаб">+</button>
+                <button id="referral-fit-all" type="button">Показать всё</button>
+                <button id="referral-fit" type="button">Показать корни</button>
+              </div>
+              <div id="referral-graph" class="referral-graph"></div>
+              <div id="referral-minimap-shell" class="referral-minimap-shell">
+                <span>Всё дерево</span>
+                <svg id="referral-minimap" viewBox="0 0 180 112" role="img" aria-label="Обзор реферального дерева. Нажмите или перетащите рамку, чтобы перейти к нужной ветке" tabindex="0"></svg>
+              </div>
+            </div>
+            <footer class="referral-graph-legend"><span><i></i>Корневой аккаунт</span><span><i></i>Приглашённый аккаунт</span><small id="referral-map-help">Зажмите мышь и тяните карту. Колесо меняет масштаб, клик по аккаунту открывает его настройки.</small></footer>
+          </section>
+          <aside id="referral-inspector" class="referral-inspector" aria-live="polite">
+            <div id="referral-inspector-empty" class="referral-inspector-empty"><span aria-hidden="true"><svg class="hub-icon"><use href="#icon-referral"></use></svg></span><strong>Выберите аккаунт</strong><small>Нажмите на аккаунт на карте. Здесь покажем его цепочку, кто его пригласил и кого пригласил он.</small></div>
+            <div id="referral-inspector-content" class="referral-inspector-content" hidden>
+              <header class="referral-inspector-profile"><i id="referral-inspector-mark">01</i><span><small id="referral-inspector-level">КОРЕНЬ</small><strong id="referral-inspector-label">Аккаунт</strong><code id="referral-inspector-address">0x…</code></span></header>
+              <section><span class="referral-inspector-caption">Цепочка до аккаунта</span><div id="referral-inspector-path" class="referral-inspector-path"></div></section>
+              <label class="referral-parent-control" for="referral-parent-select"><span>Кто пригласил аккаунт</span><select id="referral-parent-select"></select><small id="referral-parent-help">Если никого не выбрать, аккаунт станет корнем своей ветки.</small></label>
+              <button id="referral-make-root" class="button button--quiet button--wide" type="button">Сделать корнем</button>
+              <section><span class="referral-inspector-caption">Кого он пригласил</span><div id="referral-inspector-children" class="referral-inspector-children"></div></section>
+              <div class="referral-runtime-note"><svg class="hub-icon" aria-hidden="true"><use href="#icon-vault"></use></svg><span><strong>Коды сюда не нужны</strong><small>Hub хранит только связи. Реферальные коды получает сам софт.</small></span></div>
+            </div>
+          </aside>
+        </div>
+        <p id="referral-error" class="form-error" role="alert" hidden></p>
+        <footer class="referral-actions"><span id="referral-editor-count">0 аккаунтов</span><div><button class="button button--quiet" type="button" data-modal-close>Отмена</button><button id="referral-save" class="button button--acid" type="submit">Сохранить карту</button></div></footer>
+      </form>
+    </section>
+
+    <section id="quick-run-modal" class="modal modal--run" role="dialog" aria-modal="true" aria-labelledby="quick-run-modal-title" hidden>
+      <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
+      <p class="modal-kicker">БЫСТРЫЙ ЗАПУСК</p>
+      <h2 id="quick-run-modal-title">Что запустить?</h2>
+      <p>Выберите готовый софт, не переходя в библиотеку.</p>
+      <div id="quick-run-list" class="quick-run-list"></div>
+    </section>
+
+    <section id="batch-run-modal" class="modal modal--batch" role="dialog" aria-modal="true" aria-labelledby="batch-run-modal-title" hidden>
+      <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
+      <p class="modal-kicker">ПАРАЛЛЕЛЬНЫЙ ЗАПУСК</p>
+      <h2 id="batch-run-modal-title">Запустить пачку</h2>
+      <p>Проверьте действия — и Hub запустит пачку. Одновременно будет работать до четырёх задач.</p>
+      <form id="batch-run-form" novalidate>
+        <div class="batch-launch-settings">
+          <span><strong id="batch-module-count">0 софтов</strong><small>Выбранная пачка</small></span>
+          <label for="batch-account-policy"><span>Какие аккаунты использовать</span><select id="batch-account-policy"><option value="all">Все аккаунты</option><option value="first">Только первый аккаунт</option></select></label>
+          <section id="batch-concurrency-block" class="batch-concurrency-block" aria-labelledby="batch-concurrency-title">
+            <span><strong id="batch-concurrency-title">Потоки аккаунтов</strong><small id="batch-concurrency-copy">До 5 аккаунтов в каждом софте одновременно</small></span>
+            <div class="concurrency-stepper">
+              <button type="button" data-batch-concurrency-step="-1" aria-label="Уменьшить количество потоков">−</button>
+              <label for="batch-account-concurrency"><span class="sr-only">Количество параллельных аккаунтов</span><input id="batch-account-concurrency" type="number" inputmode="numeric" min="1" max="20" step="1" value="5" /></label>
+              <button type="button" data-batch-concurrency-step="1" aria-label="Увеличить количество потоков">+</button>
+            </div>
+            <div class="concurrency-presets" aria-label="Быстрый выбор потоков"><button type="button" data-batch-concurrency-preset="1">1</button><button type="button" data-batch-concurrency-preset="3">3</button><button type="button" data-batch-concurrency-preset="5">5</button><button type="button" data-batch-concurrency-preset="10">10</button><button type="button" data-batch-concurrency-preset="20">20</button></div>
+          </section>
+        </div>
+        <div id="batch-run-list" class="batch-run-list"></div>
+        <label id="batch-testnet-confirmation" class="risk-confirmation" hidden><input id="batch-risk-checkbox" type="checkbox" /><span><strong>Подтверждаю testnet-запуски в этой пачке</strong><small>Отмеченные действия могут подписывать тестовые транзакции и расходовать газ.</small></span></label>
+        <p id="batch-run-error" class="form-error" role="alert" hidden></p>
+        <div class="batch-launch-actions"><button class="button button--quiet" type="button" data-modal-close>Отмена</button><button id="batch-run-submit" class="button button--acid" type="submit"><svg class="hub-icon" aria-hidden="true"><use href="#icon-batch"></use></svg>Запустить параллельно</button></div>
+      </form>
+    </section>
+
+    <section id="destructive-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="destructive-modal-title" hidden>
+      <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
+      <p class="modal-kicker">ПРОВЕРЬТЕ ДЕЙСТВИЕ</p>
+      <h2 id="destructive-modal-title">Подтвердите действие</h2>
+      <p id="destructive-modal-copy"></p>
+      <form id="destructive-form" novalidate>
+        <label id="destructive-phrase-label" hidden><span id="destructive-phrase-copy"></span><input id="destructive-phrase" type="text" autocomplete="off" spellcheck="false" /></label>
+        <p id="destructive-error" class="form-error" role="alert" hidden></p>
+        <div class="destructive-actions"><button id="destructive-cancel" class="button button--quiet" type="button">Отмена</button><button id="destructive-submit" class="button button--danger" type="submit">Подтвердить</button></div>
+      </form>
+    </section>
+
+    <section id="run-modal" class="modal modal--run" role="dialog" aria-modal="true" aria-labelledby="run-modal-title" hidden>
+      <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
+      <p class="modal-kicker">НОВЫЙ ЗАПУСК</p>
+      <h2 id="run-modal-title">Запустить софт</h2>
+      <p id="run-modal-description"></p>
+      <form id="run-form" class="run-workbench" novalidate>
+        <section class="run-config-section" data-run-section="action" aria-labelledby="run-action-title">
+          <header class="run-config-head"><span>01</span><div><strong id="run-action-title">Что запустить</strong><small>Покажем только настройки и доступы, которые нужны выбранному действию.</small></div></header>
+          <div id="run-action-list" class="action-selector"></div>
+        </section>
+        <section id="run-requirements" class="run-requirements" aria-live="polite" tabindex="-1" hidden></section>
+        <section id="run-accounts-block" class="run-config-section" data-run-section="accounts" aria-labelledby="run-accounts-title">
+          <header class="run-config-head"><span>02</span><div><strong id="run-accounts-title">Какие аккаунты использовать</strong><small>Для каждого будет свой статус и прогресс.</small></div><div class="run-config-tools"><small id="run-account-selection">0 выбрано</small><button id="select-all-accounts" class="text-button" type="button">Выбрать все</button></div></header>
+          <div id="run-account-list" class="account-selector"></div>
+        </section>
+        <section id="run-concurrency-block" class="run-config-section run-concurrency-section" data-run-section="concurrency" aria-labelledby="run-concurrency-title">
+          <header class="run-config-head"><span>03</span><div><strong id="run-concurrency-title">Сколько аккаунтов одновременно</strong><small id="run-concurrency-copy">Выберите количество параллельных аккаунтов.</small></div><small id="run-concurrency-limit" class="run-config-count">до 1</small></header>
+          <div class="run-concurrency-card">
+            <div class="concurrency-stepper concurrency-stepper--large">
+              <button type="button" data-run-concurrency-step="-1" aria-label="Уменьшить количество потоков">−</button>
+              <label for="run-account-concurrency"><span class="sr-only">Количество параллельных аккаунтов</span><input id="run-account-concurrency" type="number" inputmode="numeric" min="1" max="1" step="1" value="1" /></label>
+              <button type="button" data-run-concurrency-step="1" aria-label="Увеличить количество потоков">+</button>
+            </div>
+            <div><strong id="run-concurrency-value">1 поток</strong><small id="run-concurrency-waves">1 аккаунт · одна волна</small></div>
+            <div id="run-concurrency-presets" class="concurrency-presets" aria-label="Быстрый выбор потоков"></div>
+          </div>
+        </section>
+        <section id="run-options-block" class="run-config-section" data-run-section="options" aria-labelledby="run-options-title">
+          <header class="run-config-head"><span>04</span><div><strong id="run-options-title">Дополнительные настройки</strong><small>Подходящие значения уже стоят. Меняйте только если нужно.</small></div><small id="run-options-count" class="run-config-count">0 параметров</small></header>
+          <div id="run-options" class="run-options"></div>
+        </section>
+        <label id="risk-confirmation" class="risk-confirmation" hidden><input id="risk-checkbox" name="testnet-confirmation" type="checkbox" /><span><strong>Подтверждаю запуск в testnet</strong><small>Действие может подписывать тестовые транзакции и расходовать газ.</small></span></label>
+        <label id="mainnet-confirmation" hidden>Фраза подтверждения<input id="mainnet-phrase" name="mainnet-confirmation" type="text" autocomplete="off" spellcheck="false" /></label>
+        <p id="run-error" class="form-error" role="alert" hidden></p>
+        <footer class="run-launch-footer"><span><strong>Готово к запуску</strong><small id="run-launch-summary" aria-live="polite">Выберите сценарий и аккаунты.</small></span><button id="run-submit" class="button button--acid" type="submit">Запустить</button></footer>
+      </form>
+    </section>
+
+    <aside id="run-drawer" class="drawer" aria-labelledby="drawer-title" hidden>
+      <div class="drawer-head"><div><p>ЗАПУСК</p><h2 id="drawer-title">Журнал</h2></div><button id="drawer-close" class="modal-close drawer-close" type="button" aria-label="Закрыть журнал запуска" title="Закрыть"><svg class="hub-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button></div>
+      <div id="drawer-meta" class="drawer-meta"></div>
+      <progress id="drawer-progress-bar" class="drawer-progress" max="100" value="0" aria-label="Прогресс запуска">0%</progress>
+      <section class="drawer-account-section" aria-labelledby="drawer-account-title">
+        <div class="drawer-section-head"><div><p>АККАУНТЫ В РАБОТЕ</p><h3 id="drawer-account-title">Статусы аккаунтов</h3></div><span id="drawer-account-summary" role="status" aria-live="polite">Загружаем…</span></div>
+        <div id="drawer-account-table-wrap" class="drawer-account-table-wrap" tabindex="0" aria-label="Таблица состояний аккаунтов" hidden>
+          <table id="drawer-account-table" class="drawer-account-table">
+            <caption class="sr-only">Текущий этап и состояние каждого аккаунта в запуске</caption>
+            <thead><tr><th scope="col">Аккаунт</th><th scope="col">Текущий этап</th><th scope="col">Прогресс</th><th scope="col">Состояние</th></tr></thead>
+            <tbody id="drawer-account-table-body"></tbody>
+          </table>
+        </div>
+        <div id="drawer-account-empty" class="drawer-account-empty" role="status"><span aria-hidden="true">00</span><div><strong id="drawer-account-empty-title">Загружаем статусы…</strong><small id="drawer-account-empty-copy">Ждём первые статусы от софта.</small></div></div>
+      </section>
+      <details id="drawer-technical-log" class="drawer-technical-log">
+        <summary aria-controls="drawer-technical-log-body"><span><svg class="hub-icon" aria-hidden="true"><use href="#icon-search"></use></svg>Общий лог софта</span><small id="drawer-event-count">0 событий</small></summary>
+        <div id="drawer-technical-log-body" class="drawer-technical-log-body">
+          <p id="drawer-events-empty" class="drawer-events-empty" role="status">Технических событий пока нет.</p>
+          <div id="drawer-events" class="event-console" role="log" aria-live="off" aria-relevant="additions" aria-atomic="false" hidden></div>
+        </div>
+      </details>
+      <div class="drawer-log-export">
+        <span id="drawer-log-export-note">Весь запуск · UTF-8 · приватники, пароли и другие секреты скрыты</span>
+        <button id="drawer-download-log" class="button button--quiet" type="button" aria-describedby="drawer-log-export-note"><svg class="hub-icon" aria-hidden="true"><use href="#icon-download"></use></svg>Скачать полный лог</button>
+      </div>
+      <p id="drawer-stop-note" class="drawer-stop-note" role="status" hidden></p>
+      <p id="drawer-resolution-note" class="drawer-stop-note" role="status" hidden></p>
+      <div class="drawer-actions">
+        <button id="drawer-review" class="button button--quiet" type="button" hidden><svg class="hub-icon" aria-hidden="true"><use href="#icon-check"></use></svg>Скрыть уведомление</button>
+        <button id="drawer-reconcile" class="button button--ink" type="button" hidden>Сверка выполнена</button>
+        <button id="drawer-stop" class="button button--quiet" type="button"><svg class="hub-icon" aria-hidden="true"><use href="#icon-stop"></use></svg>Остановить мягко</button>
+        <button id="drawer-force-stop" class="button button--danger" type="button"><svg class="hub-icon" aria-hidden="true"><use href="#icon-force"></use></svg>Остановить принудительно</button>
+      </div>
+    </aside>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>
