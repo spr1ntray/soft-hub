@@ -82,7 +82,7 @@
             <span class="nav-index">05</span><span>Патчи</span><i data-nav-count="patches"></i>
           </button>
           <button class="nav-item" type="button" data-view="settings" aria-label="Настройки">
-            <span class="nav-index">06</span><span>Настройки</span>
+            <span class="nav-index">06</span><span>Настройки</span><i id="nav-core-update" aria-hidden="true"></i>
           </button>
         </nav>
 
@@ -207,13 +207,13 @@
               <article class="account-capability account-capability--browser">
                 <span class="capability-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-browser"></use></svg></span>
                 <div class="capability-copy"><p>БРАУЗЕР</p><h3>AdsPower Local API</h3><span>API-ключ один на весь Hub. ID профиля AdsPower задаётся отдельно для каждого аккаунта.</span></div>
+                <span id="adspower-status" class="capability-status" data-state="loading" role="status" aria-live="polite">Проверяем</span>
                 <form id="adspower-form" class="capability-secret-form">
                   <label for="adspower-key" class="sr-only">Общий AdsPower Local API key</label>
                   <input id="adspower-key" type="password" minlength="4" autocomplete="off" spellcheck="false" placeholder="Вставьте общий API key" />
                   <button id="adspower-save" class="button button--ink" type="submit">Сохранить</button>
                   <button id="adspower-clear" class="button button--quiet" type="button">Удалить</button>
                 </form>
-                <span id="adspower-status" class="setting-value capability-status">Проверяем</span>
               </article>
               <article class="account-capability account-capability--referrals">
                 <span class="capability-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-referral"></use></svg></span>
@@ -314,7 +314,7 @@
             <div class="patch-layout">
               <div class="install-stack">
                 <article id="drop-zone" class="drop-zone border-glow">
-                  <input id="plugin-file-input" type="file" accept=".zip,.softhub,application/zip" hidden />
+                  <input id="plugin-file-input" type="file" accept=".softhub.zip,.softhub" hidden />
                   <span class="drop-mark" aria-hidden="true"><i></i><i></i><i></i></span>
                   <p>ПАКЕТ С КОМПЬЮТЕРА</p>
                   <h3>Перетащите <code>.softhub.zip</code></h3>
@@ -346,13 +346,24 @@
           <section id="view-settings" class="view">
             <div class="section-intro"><div><p class="section-kicker">НАСТРОЙКИ</p><h2>Настройки</h2><span>Здесь версия Hub, хранилище, ключи и общие правила запуска.</span></div></div>
             <div class="settings-grid">
-              <article class="setting-card setting-card--update">
-                <span class="setting-index">UP</span>
+              <article id="core-update-card" class="setting-card setting-card--update" data-state="idle" aria-labelledby="core-update-heading" aria-busy="false">
+                <span class="setting-index setting-update-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-download"></use></svg><i></i></span>
                 <div class="setting-update-copy">
-                  <div class="setting-update-head"><h3>Обновление Hub</h3><span id="settings-app-version">v…</span></div>
-                  <p>Новая версия ставится поверх текущей. Vault, аккаунты, софты, история и результаты лежат отдельно — установщик их не тронет.</p>
+                  <div class="setting-update-head"><h3 id="core-update-heading">Обновление Hub</h3><span id="settings-app-version">v…</span><span id="core-update-state" class="setting-update-state" data-state="idle">ГОТОВ К ПРОВЕРКЕ</span></div>
+                  <div id="core-update-live" class="core-update-live" role="status" aria-live="polite" aria-atomic="true">
+                    <strong id="core-update-title">Проверим, есть ли новая версия</strong>
+                    <p id="core-update-copy">Hub сам посмотрит официальный GitHub. Скачивание и установка начнутся только после вашего разрешения.</p>
+                  </div>
+                  <div id="core-update-progress" class="core-update-progress" hidden>
+                    <progress id="core-update-progress-bar" max="100" value="0" aria-label="Загрузка обновления: 0%">0%</progress>
+                    <span id="core-update-progress-copy">0%</span>
+                  </div>
+                  <details id="core-update-notes" class="core-update-notes" hidden>
+                    <summary><svg class="hub-icon" aria-hidden="true"><use href="#icon-check"></use></svg><span>Что изменилось</span></summary>
+                    <ul id="core-update-notes-list"></ul>
+                  </details>
                   <details id="core-update-guide" class="core-update-guide">
-                    <summary><svg class="hub-icon" aria-hidden="true"><use href="#icon-download"></use></svg><span>Как перейти на новую версию</span></summary>
+                    <summary><svg class="hub-icon" aria-hidden="true"><use href="#icon-download"></use></svg><span>Если обновление не запускается</span></summary>
                     <div class="core-update-steps">
                       <span><b>1</b><span><strong>Закончите работу</strong><small>Дождитесь запусков и закройте всё, что требует сверки.</small></span></span>
                       <span><b>2</b><span><strong>Закройте Hub</strong><small>Заблокируйте Vault и полностью завершите приложение.</small></span></span>
@@ -361,7 +372,10 @@
                     <p class="core-update-note"><strong>Не удаляйте старую базу вручную.</strong> После запуска проверьте версию. Если рядом с софтом появится «Подготовить», нажмите один раз — его данные останутся на месте.</p>
                   </details>
                 </div>
-                <span class="setting-value setting-update-mode">РУЧНОЕ ОБНОВЛЕНИЕ</span>
+                <div class="setting-update-actions">
+                  <button id="core-update-primary" class="button button--ink specular-button" type="button" aria-describedby="core-update-copy">Проверить обновления</button>
+                  <button id="core-update-secondary" class="button button--quiet" type="button" aria-controls="core-update-guide" hidden>Открыть инструкцию</button>
+                </div>
               </article>
               <article class="setting-card"><span class="setting-index">01</span><div><h3>Vault</h3><p id="settings-vault-copy">Проверяем состояние хранилища.</p></div><button id="settings-vault-action" class="button button--quiet" type="button">Открыть</button></article>
               <article class="setting-card setting-card--secret"><span class="setting-index">02</span><div><h3>Capsolver</h3><p>Один ключ для всех софтов с Capsolver. Он хранится в Vault и выдаётся только тем, кому действительно нужен.</p><form id="capsolver-form" class="inline-secret-form"><label for="capsolver-key" class="sr-only">API-ключ Capsolver</label><input id="capsolver-key" type="password" minlength="4" autocomplete="off" spellcheck="false" placeholder="Введите новый API-ключ" /><button id="capsolver-save" class="button button--ink" type="submit">Сохранить</button><button id="capsolver-clear" class="button button--quiet" type="button">Удалить</button></form></div><span id="capsolver-status" class="setting-value">НЕ ДОБАВЛЕН</span></article>

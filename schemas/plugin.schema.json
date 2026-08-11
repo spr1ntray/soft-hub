@@ -9,13 +9,22 @@
       "properties": {
         "group": { "type": "string", "minLength": 1, "maxLength": 80 },
         "order": { "type": "integer", "minimum": 0, "maximum": 1000 },
-        "control": { "enum": ["input", "textarea"] },
+        "control": { "enum": ["input", "textarea", "slider", "dual_range"] },
         "placeholder": { "type": "string", "minLength": 1, "maxLength": 160 },
         "unit": { "type": "string", "minLength": 1, "maxLength": 24 },
         "advanced": { "type": "boolean" },
         "enum_labels": {
           "type": "object",
           "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 120 }
+        },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "role"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+            "role": { "enum": ["from", "to"] }
+          }
         }
       }
     },

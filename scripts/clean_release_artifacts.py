@@ -23,8 +23,22 @@ METADATA_NAMES = {
     "latest-mac.yml",
     "latest.yml",
 }
-INSTALLER_RE = re.compile(r"^Soft Hub-(?P<version>\d+\.\d+\.\d+)-.+\.(?:dmg|exe)$")
-SIDECAR_SUFFIXES = (".blockmap", ".sha256")
+_VERSION_PATTERN = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+RELEASE_ARTIFACT_RE = re.compile(
+    rf"^Soft-Hub-(?P<version>{_VERSION_PATTERN})-"
+    r"(?P<target>arm64\.dmg|x64\.exe)$"
+)
+UNNEEDED_RELEASE_ARTIFACT_RE = re.compile(
+    rf"^Soft-Hub-(?P<version>{_VERSION_PATTERN})-"
+    r"(?:arm64|x64)\.(?:dmg|exe|zip)(?:\.blockmap)?$"
+)
+LEGACY_ARTIFACT_RE = re.compile(
+    rf"^Soft(?: |\.)Hub-(?P<version>{_VERSION_PATTERN})-.+"
+    r"\.(?:dmg|exe|zip)(?:\.blockmap)?$"
+)
+_CHECKSUM_LINE_RE = re.compile(
+    r"^[0-9a-f]{64}  (?P<name>[A-Za-z0-9][A-Za-z0-9._-]{0,239})$"
+)
 
 
 def _package_version() -> str:
@@ -59,6 +73,44 @@ def _remove(path: Path) -> None:
     print(f"removed {path.relative_to(PROJECT_ROOT)}")
 
 
+def _artifact_platform(name: str) -> str | None:
+    match = RELEASE_ARTIFACT_RE.fullmatch(name)
+    if match:
+        return "win" if match.group("target") == "x64.exe" else "mac"
+    return None
+
+
+def _checksums_are_current(path: Path, current_version: str) -> bool:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 256 * 1024:
+        return False
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return False
+    if not lines:
+        return False
+    installer_found = False
+    seen_names: set[str] = set()
+    for line in lines:
+        match = _CHECKSUM_LINE_RE.fullmatch(line)
+        if match is None:
+            return False
+        name = match.group("name")
+        artifact = RELEASE_ARTIFACT_RE.fullmatch(name)
+        installer = INSTALLERS_DIR / name
+        if (
+            artifact is None
+            or artifact.group("version") != current_version
+            or name.casefold() in seen_names
+            or installer.is_symlink()
+            or not installer.is_file()
+        ):
+            return False
+        seen_names.add(name.casefold())
+        installer_found = True
+    return installer_found
+
+
 def clean(*, before_build: bool, platform: str | None = None) -> None:
     _validate_installers_directory()
     INSTALLERS_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,20 +125,26 @@ def clean(*, before_build: bool, platform: str | None = None) -> None:
         if name in STAGING_NAMES or name in METADATA_NAMES:
             _remove(path)
             continue
-        if name.endswith(SIDECAR_SUFFIXES):
+        if name == "SHA256SUMS":
+            if before_build or not _checksums_are_current(path, current_version):
+                _remove(path)
+            continue
+        if LEGACY_ARTIFACT_RE.fullmatch(name):
             _remove(path)
             continue
-
-        installer = INSTALLER_RE.fullmatch(name)
-        if installer:
-            stale_version = installer.group("version") != current_version
-            target_platform = (
-                platform == "mac" and name.endswith(".dmg")
-            ) or (
-                platform == "win" and name.endswith(".exe")
-            )
-            if stale_version or (before_build and target_platform):
+        artifact = RELEASE_ARTIFACT_RE.fullmatch(name)
+        if artifact:
+            version = artifact.group("version")
+            if version != current_version or (
+                before_build and platform == _artifact_platform(name)
+            ):
                 _remove(path)
+            continue
+        if UNNEEDED_RELEASE_ARTIFACT_RE.fullmatch(name):
+            _remove(path)
+            continue
+        if name.endswith((".blockmap", ".sha256")):
+            _remove(path)
 
 
 def main() -> None:

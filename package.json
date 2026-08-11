@@ -1,7 +1,7 @@
 {
   "name": "soft-hub",
   "productName": "Soft Hub",
-  "version": "0.6.11",
+  "version": "0.6.12",
   "description": "Локальный хаб для запуска и контроля Python-софтов",
   "author": "sprintray",
   "private": true,
@@ -17,8 +17,9 @@
     "runtime:prepare:win": "python3 scripts/prepare_runtime.py --target win32-x64",
     "build:example": "python3 scripts/build_plugin.py examples/hello-soft build/examples/hello-soft-1.1.0.softhub.zip",
     "test": "python3 -m unittest discover -s tests -v",
-    "typecheck": "python3 scripts/check_python_syntax.py && node --check soft_hub/static/app.js && node --check electron/main.cjs && node --check scripts/verify_desktop_runtime.cjs",
+    "typecheck": "python3 scripts/check_python_syntax.py && node --check soft_hub/static/app.js && node --check electron/main.cjs && node --check electron/updater.cjs && node --check electron/preload.cjs && node --check scripts/verify_desktop_runtime.cjs",
     "release:clean": "python3 scripts/clean_release_artifacts.py --after",
+    "release:verify": "python3 scripts/clean_release_artifacts.py --after && python3 scripts/write_installer_checksums.py --require-complete",
     "dist:mac": "python3 scripts/clean_release_artifacts.py --before --platform mac && python3 scripts/prepare_runtime.py --target darwin-arm64 && python3 scripts/prepare_runtime.py --target darwin-arm64 --check && electron-builder --mac --arm64 --publish never && python3 scripts/clean_release_artifacts.py --after && python3 scripts/write_installer_checksums.py",
     "dist:win": "python3 scripts/clean_release_artifacts.py --before --platform win && python3 scripts/prepare_runtime.py --target win32-x64 && python3 scripts/prepare_runtime.py --target win32-x64 --check && electron-builder --win --x64 --publish never && python3 scripts/clean_release_artifacts.py --after && python3 scripts/write_installer_checksums.py"
   },
@@ -34,7 +35,7 @@
     },
     "beforePack": "./scripts/verify_desktop_runtime.cjs",
     "asar": true,
-    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "artifactName": "Soft-Hub-${version}-${arch}.${ext}",
     "files": [
       "electron/**",
       "package.json"

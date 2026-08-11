@@ -2879,13 +2879,27 @@ def run(context):
                 },
                 "mode": {"type": "string", "enum": ["safe", "fast"]},
                 "enabled": {"type": "boolean"},
+                "delay_from": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "multipleOf": 1,
+                    "x-ui": {"control": "dual_range", "range": {"id": "delay", "role": "from"}},
+                },
+                "delay_to": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "multipleOf": 1,
+                    "x-ui": {"control": "dual_range", "range": {"id": "delay", "role": "to"}},
+                },
             },
         }
         self.install_plugin(
             "def run(context):\n    return {'options': context.options}\n",
             manifest,
         )
-        valid = {"count": 4, "ratio": 0.3, "mode": "safe", "enabled": True}
+        valid = {"count": 4, "ratio": 0.3, "mode": "safe", "enabled": True, "delay_from": 3, "delay_to": 8}
         invalid_cases = (
             ("unknown", {**valid, "injected": "bypass"}, "неизвестное поле"),
             ("required", {key: value for key, value in valid.items() if key != "mode"}, "обязательное"),
@@ -2897,6 +2911,8 @@ def run(context):
             ("maximum", {**valid, "count": 8}, "maximum"),
             ("integer multiple", {**valid, "count": 3}, "multipleOf"),
             ("number multiple", {**valid, "ratio": 0.35}, "multipleOf"),
+            ("reversed range", {**valid, "delay_from": 9, "delay_to": 4}, "from больше to"),
+            ("half range", {key: value for key, value in valid.items() if key != "delay_to"}, "требует значения from и to"),
             ("nan", {**valid, "ratio": float("nan")}, "неверный тип"),
             ("infinity", {**valid, "ratio": float("inf")}, "неверный тип"),
         )

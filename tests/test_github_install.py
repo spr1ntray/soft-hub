@@ -107,6 +107,7 @@ class GitHubPackageFetcherTests(unittest.TestCase):
             "https://example.com/o/r/releases/download/v1/a.zip",
             "https://user:password@github.com/o/r",
             "https://github.com/o/r/archive/refs/heads/main.zip",
+            "https://github.com/o/r/releases/download/v1/source.zip",
             "https://github.com/o/r/tree/main",
             "https://github.com/o/r?asset=a.zip",
         ]
@@ -114,6 +115,28 @@ class GitHubPackageFetcherTests(unittest.TestCase):
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(GitHubInstallError):
                 fetcher.resolve(value)
+
+    def test_repository_never_falls_back_to_a_generic_source_zip(self) -> None:
+        payload = json.dumps(
+            {
+                "tag_name": "v1",
+                "assets": [
+                    {
+                        "name": "source.zip",
+                        "browser_download_url": (
+                            "https://github.com/o/r/releases/download/v1/source.zip"
+                        ),
+                    }
+                ],
+            }
+        ).encode()
+        fetcher = GitHubPackageFetcher(
+            QueueOpener(
+                StubResponse(payload, url="https://api.github.com/repos/o/r/releases/latest")
+            )
+        )
+        with self.assertRaisesRegex(GitHubInstallError, r"\.softhub\.zip"):
+            fetcher.resolve("https://github.com/o/r")
 
     def test_download_is_bounded_and_validates_final_redirect_host(self) -> None:
         direct = "https://github.com/o/r/releases/download/v1/plugin.softhub.zip"

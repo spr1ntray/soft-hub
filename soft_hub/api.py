@@ -770,8 +770,11 @@ class HubRequestHandler(BaseHTTPRequestHandler):
             raise ApiError("Ожидается ZIP archive", 415)
         length = self._content_length(MAX_ARCHIVE_BYTES)
         filename = self.headers.get("X-Soft-Hub-Filename", "plugin.softhub.zip")
-        if not filename.lower().endswith((".zip", ".softhub")):
-            raise ApiError("Поддерживаются .softhub и .zip")
+        if not filename.lower().endswith((".softhub.zip", ".softhub")):
+            raise ApiError(
+                "Нужен готовый .softhub.zip из GitHub Releases → Assets; "
+                "обычный Source code ZIP не подходит"
+            )
         temporary = self.application.paths.imports / f"{uuid.uuid4()}.softhub.zip"
         remaining = length
         try:

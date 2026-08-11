@@ -130,6 +130,63 @@ class ManifestValidationTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaisesRegex(PluginError, message):
                 validate_manifest(manifest)
 
+    def test_strict_v3_accepts_sliders_and_validates_dual_range_pairs(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        source = json.loads(
+            (project_root / "examples" / "hello-soft" / "hub.plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        action = source["actions"][0]
+        action["options"]["properties"]["steps"]["x-ui"]["control"] = "slider"
+        pair = {
+            "type": "integer",
+            "title": "Количество транзакций",
+            "description": "Случайное число транзакций для одного аккаунта.",
+            "minimum": 2,
+            "maximum": 20,
+            "multipleOf": 1,
+            "default": 4,
+            "x-ui": {
+                "group": "Основные параметры",
+                "order": 20,
+                "unit": "транзакций",
+                "control": "dual_range",
+                "range": {"id": "transactions", "role": "from"},
+            },
+        }
+        action["options"]["properties"]["transactions_from"] = pair
+        upper = copy.deepcopy(pair)
+        upper["default"] = 8
+        upper["x-ui"]["order"] = 30
+        upper["x-ui"]["range"]["role"] = "to"
+        action["options"]["properties"]["transactions_to"] = upper
+
+        validated = validate_manifest(source)
+        self.assertEqual(
+            validated["actions"][0]["options"]["properties"]["transactions_to"]["default"],
+            8,
+        )
+
+        invalid_cases = []
+        missing_mate = copy.deepcopy(source)
+        missing_mate["actions"][0]["options"]["properties"].pop("transactions_to")
+        invalid_cases.append(("missing mate", missing_mate, "ровно одну пару"))
+        duplicate_role = copy.deepcopy(source)
+        duplicate_role["actions"][0]["options"]["properties"]["transactions_to"]["x-ui"]["range"]["role"] = "from"
+        invalid_cases.append(("duplicate role", duplicate_role, "ровно одну пару"))
+        reversed_defaults = copy.deepcopy(source)
+        reversed_defaults["actions"][0]["options"]["properties"]["transactions_from"]["default"] = 10
+        reversed_defaults["actions"][0]["options"]["properties"]["transactions_to"]["default"] = 4
+        invalid_cases.append(("reversed", reversed_defaults, "from больше default to"))
+        mismatched_grid = copy.deepcopy(source)
+        mismatched_grid["actions"][0]["options"]["properties"]["transactions_to"]["multipleOf"] = 2
+        invalid_cases.append(("mismatched grid", mismatched_grid, "multipleOf должен совпадать"))
+
+        for label, manifest, message in invalid_cases:
+            with self.subTest(label=label), self.assertRaisesRegex(PluginError, message):
+                validate_manifest(manifest)
+
     def test_unknown_contract_version_is_rejected_while_legacy_still_loads(self) -> None:
         legacy = plugin_manifest()
         self.assertNotIn("contract_version", validate_manifest(legacy))
@@ -495,6 +552,9 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertEqual(concurrency["properties"]["minimum"]["const"], 1)
         self.assertEqual(concurrency["properties"]["maximum"]["maximum"], 20)
         self.assertIn("SH-SOFTWARE-0.6/3", schema["properties"]["contract_version"]["enum"])
+        option_ui = schema["$defs"]["optionUi"]
+        self.assertIn("dual_range", option_ui["properties"]["control"]["enum"])
+        self.assertEqual(option_ui["properties"]["range"]["required"], ["id", "role"])
 
     def test_external_write_is_nonfinancial_account_scoped_and_chainless(self) -> None:
         source = plugin_manifest(
@@ -643,6 +703,28 @@ class PluginArchiveTestCase(unittest.TestCase):
         write_plugin_archive(omitted, plugin_manifest(), checksum_names=payload_names)
         with self.assertRaisesRegex(PluginError, "Список контрольных сумм"):
             self.manager.inspect_archive(omitted)
+
+    def test_source_and_wrapped_zips_get_actionable_package_errors(self) -> None:
+        source_zip = self.root / "github-source.zip"
+        with zipfile.ZipFile(source_zip, "w") as bundle:
+            bundle.writestr(
+                regular_zip_info("project-v1/hub.plugin.json"),
+                json.dumps(plugin_manifest()).encode(),
+            )
+            bundle.writestr(regular_zip_info("project-v1/plugin/main.py"), b"def run(context): pass\n")
+        with self.assertRaisesRegex(PluginError, "Source code ZIP"):
+            self.manager.inspect_archive(source_zip)
+
+        valid = self.archive("package-for-wrapper.softhub.zip")
+        wrapped = self.root / "wrapped.softhub.zip"
+        with zipfile.ZipFile(valid) as source, zipfile.ZipFile(wrapped, "w") as destination:
+            for info in source.infolist():
+                destination.writestr(
+                    regular_zip_info(f"extra-folder/{info.filename}"),
+                    source.read(info.filename),
+                )
+        with self.assertRaisesRegex(PluginError, "лишней общей папкой"):
+            self.manager.inspect_archive(wrapped)
 
     def test_presentation_assets_are_local_checked_and_format_verified(self) -> None:
         manifest = plugin_manifest()

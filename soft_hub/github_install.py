@@ -20,7 +20,7 @@ _DOWNLOAD_HOSTS = {
     "release-assets.githubusercontent.com",
 }
 _API_HOST = "api.github.com"
-_PACKAGE_SUFFIXES = (".softhub.zip", ".softhub", ".zip")
+_PACKAGE_SUFFIXES = (".softhub.zip", ".softhub")
 
 
 class GitHubInstallError(ValueError):
@@ -129,7 +129,9 @@ class GitHubPackageFetcher:
             or "\\" in filename
             or not lowered.endswith(_PACKAGE_SUFFIXES)
         ):
-            raise GitHubInstallError("Release asset должен быть .softhub.zip или .zip")
+            raise GitHubInstallError(
+                "Нужен готовый release asset .softhub.zip — GitHub Source code ZIP не подходит"
+            )
 
     def _release_asset(
         self,
@@ -151,7 +153,6 @@ class GitHubPackageFetcher:
             raise GitHubInstallError("GitHub release не содержит списка assets")
 
         candidates: list[tuple[str, str]] = []
-        zip_fallback: list[tuple[str, str]] = []
         for asset in assets:
             if not isinstance(asset, dict):
                 continue
@@ -162,9 +163,7 @@ class GitHubPackageFetcher:
             lowered = name.lower()
             if lowered.endswith((".softhub.zip", ".softhub")):
                 candidates.append((name, url))
-            elif lowered.endswith(".zip"):
-                zip_fallback.append((name, url))
-        selected = candidates or zip_fallback
+        selected = candidates
         if not selected:
             raise GitHubInstallError("В GitHub release нет .softhub.zip asset")
         if len(selected) != 1:

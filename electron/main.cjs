@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, powerMonitor, session, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, net, powerMonitor, session, shell } = require('electron');
 const { existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
@@ -8,9 +8,12 @@ let mainWindow;
 let hubProcess;
 let hubUrl;
 let startupTimer;
+let hubStopPromise;
+let hubUpdater;
 
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
+const updaterRuntime = singleInstance ? require('./updater.cjs') : null;
 app.setName('Soft Hub');
 app.enableSandbox();
 
@@ -48,13 +51,51 @@ function pythonCandidate() {
   return null;
 }
 
-function stopHub() {
-  if (!hubProcess || hubProcess.exitCode !== null) return;
-  hubProcess.kill('SIGTERM');
+async function stopHubAndWait() {
   const processToStop = hubProcess;
-  setTimeout(() => {
-    if (processToStop.exitCode === null) processToStop.kill('SIGKILL');
-  }, 14000).unref();
+  if (!processToStop || processToStop.exitCode !== null) return;
+  if (hubStopPromise) return hubStopPromise;
+  hubStopPromise = new Promise((resolve, reject) => {
+    let forceTimer;
+    let finalTimer;
+    const finish = () => {
+      clearTimeout(forceTimer);
+      clearTimeout(finalTimer);
+      resolve();
+    };
+    const fail = () => {
+      clearTimeout(forceTimer);
+      clearTimeout(finalTimer);
+      reject(new Error('Ядро Soft Hub не завершилось вовремя.'));
+    };
+    processToStop.once('exit', finish);
+    try {
+      processToStop.kill('SIGTERM');
+    } catch {
+      finish();
+      return;
+    }
+    forceTimer = setTimeout(() => {
+      if (processToStop.exitCode === null) {
+        try { processToStop.kill('SIGKILL'); } catch { /* Process already exited. */ }
+      }
+      finalTimer = setTimeout(() => {
+        if (processToStop.exitCode === null) fail();
+        else finish();
+      }, 2_000);
+      finalTimer.unref();
+    }, 14_000);
+    forceTimer.unref();
+  }).finally(() => {
+    hubStopPromise = null;
+  });
+  return hubStopPromise;
+}
+
+function stopHub() {
+  void stopHubAndWait().catch((error) => {
+    console.error('[soft-hub-core] stop failed', error instanceof Error ? error.message : String(error));
+  });
 }
 
 function publicGitHubRepositoryUrl(value) {
@@ -77,22 +118,148 @@ function publicGitHubRepositoryUrl(value) {
   }
 }
 
-async function lockVaultForSystemEvent() {
-  if (!hubUrl) return;
+function hubApiConnection() {
+  if (!hubUrl) throw new Error('Ядро Hub ещё не готово.');
+  const parsed = new URL(hubUrl);
+  const token = new URLSearchParams(parsed.hash.slice(1)).get('token');
+  if (!token || parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1') {
+    throw new Error('Некорректное локальное соединение Hub.');
+  }
+  return { origin: parsed.origin, token };
+}
+
+async function hubApi(pathname, { method = 'GET', body = undefined } = {}) {
+  const { origin, token } = hubApiConnection();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
   try {
-    const parsed = new URL(hubUrl);
-    const token = new URLSearchParams(parsed.hash.slice(1)).get('token');
-    if (!token) return;
-    await fetch(new URL('/api/vault/lock', parsed.origin), {
-      method: 'POST',
+    const response = await fetch(new URL(pathname, origin), {
+      method,
       headers: {
         'Content-Type': 'application/json',
         'X-Soft-Hub-Token': token,
       },
-      body: '{}',
+      body,
+      signal: controller.signal,
     });
+    if (!response.ok) throw new Error('Локальное ядро Hub отклонило запрос.');
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function lockVaultForUpdate() {
+  await hubApi('/api/vault/lock', { method: 'POST', body: '{}' });
+}
+
+async function lockVaultForSystemEvent() {
+  if (!hubUrl) return;
+  try {
+    await lockVaultForUpdate();
   } catch (error) {
     console.error('[soft-hub-core] vault auto-lock failed', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function activeRunsForUpdate() {
+  const bootstrap = await hubApi('/api/bootstrap');
+  const activeRuns = Number(bootstrap?.stats?.active_runs);
+  if (!Number.isSafeInteger(activeRuns) || activeRuns < 0) {
+    throw new Error('Hub вернул некорректное число активных задач.');
+  }
+  return activeRuns;
+}
+
+function trustedUpdaterSender(event) {
+  if (!mainWindow || !hubUrl) return false;
+  if (event.sender !== mainWindow.webContents) return false;
+  if (event.senderFrame !== mainWindow.webContents.mainFrame) return false;
+  try {
+    return new URL(event.senderFrame.url).origin === new URL(hubUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+function requireTrustedUpdaterSender(event) {
+  if (!trustedUpdaterSender(event)) throw new Error('Updater IPC доступен только главному окну Hub.');
+}
+
+function broadcastUpdaterState(state) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(updaterRuntime.UPDATE_IPC.stateChanged, state);
+}
+
+async function confirmUpdateInstall(state) {
+  const platformInstruction = process.platform === 'darwin'
+    ? 'После открытия DMG замените Soft Hub в Applications.'
+    : 'Откроется обычный установщик Windows и поставит версию поверх текущей.';
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Обновить Soft Hub',
+    message: `Установить Soft Hub ${state.availableVersion}?`,
+    detail: `${platformInstruction}\n\nVault, аккаунты, софты и история лежат отдельно и останутся на месте.`,
+    buttons: ['Открыть установщик', 'Не сейчас'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  return result.response === 0;
+}
+
+async function openVerifiedInstaller(installerPath) {
+  const error = await shell.openPath(installerPath);
+  if (error) throw new Error('Операционная система не смогла открыть установщик.');
+}
+
+async function recoverCoreAfterUpdateFailure() {
+  if (hubProcess && hubProcess.exitCode === null) return;
+  hubUrl = undefined;
+  try {
+    const url = await startHub();
+    if (mainWindow && !mainWindow.isDestroyed()) await mainWindow.loadURL(url);
+  } catch (error) {
+    // A clean relaunch is the final recovery path if the existing renderer can
+    // no longer be reconnected to a freshly started core.
+    try { await stopHubAndWait(); } catch { /* Best effort before hard exit. */ }
+    app.relaunch();
+    app.exit(0);
+    throw error;
+  }
+}
+
+function setupUpdater() {
+  const { HubUpdater, UPDATE_IPC } = updaterRuntime;
+  hubUpdater = new HubUpdater({
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    userDataPath: app.getPath('userData'),
+    fetchImpl: (url, options) => net.fetch(url, options),
+    enabled: app.isPackaged,
+    onStateChange: broadcastUpdaterState,
+    getActiveRuns: activeRunsForUpdate,
+    confirmInstall: confirmUpdateInstall,
+    lockVault: lockVaultForUpdate,
+    stopCore: stopHubAndWait,
+    openInstaller: openVerifiedInstaller,
+    recoverCore: recoverCoreAfterUpdateFailure,
+    quitApp: () => app.quit(),
+  });
+
+  const methods = [
+    [UPDATE_IPC.getState, () => hubUpdater.snapshot()],
+    [UPDATE_IPC.check, () => hubUpdater.check()],
+    [UPDATE_IPC.download, () => hubUpdater.download()],
+    [UPDATE_IPC.cancel, () => hubUpdater.cancel()],
+    [UPDATE_IPC.install, () => hubUpdater.install()],
+  ];
+  for (const [channel, method] of methods) {
+    ipcMain.handle(channel, async (event) => {
+      requireTrustedUpdaterSender(event);
+      return await method();
+    });
   }
 }
 
@@ -199,6 +366,7 @@ async function createWindow() {
     backgroundColor: '#e9e4da',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
+      preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -241,6 +409,7 @@ if (singleInstance) {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
     powerMonitor.on('lock-screen', () => { void lockVaultForSystemEvent(); });
     powerMonitor.on('suspend', () => { void lockVaultForSystemEvent(); });
+    setupUpdater();
     return createWindow();
   }).catch((error) => {
     dialog.showErrorBox('Soft Hub не запустился', error instanceof Error ? error.message : String(error));
@@ -250,7 +419,9 @@ if (singleInstance) {
     if (mainWindow) mainWindow.focus();
     else void createWindow();
   });
-  app.on('before-quit', stopHub);
+  app.on('before-quit', () => {
+    stopHub();
+  });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });

@@ -63,6 +63,22 @@ const state = {
   resultReportRequestGeneration: 0,
   resultReportFilterTimer: null,
   patchRadarTimer: null,
+  coreUpdate: {
+    phase: 'idle',
+    bridgeAvailable: null,
+    currentVersion: '',
+    availableVersion: '',
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    releaseNotes: [],
+    checkedAt: '',
+    errorKind: '',
+    installIssue: '',
+  },
+  coreUpdateAutoCheckStarted: false,
+  coreUpdateUnsubscribe: null,
+  coreUpdateNotifiedVersion: '',
   protectedDataEpoch: 0,
   referralRevision: '',
   referralDraft: new Map(),
@@ -724,15 +740,527 @@ function updateVaultState() {
   renderDock();
 }
 
+function coreUpdaterBridge() {
+  try {
+    const desktop = window.softHubDesktop;
+    const updater = desktop?.updater || desktop?.updates;
+    return updater && typeof updater === 'object' ? updater : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeCoreUpdatePhase(value) {
+  const phase = String(value || 'idle').trim().toLowerCase().replaceAll('_', '-');
+  const aliases = {
+    'checking-for-update': 'checking',
+    'update-not-available': 'current',
+    'not-available': 'current',
+    'up-to-date': 'current',
+    latest: 'current',
+    'update-available': 'available',
+    'download-progress': 'downloading',
+    downloaded: 'ready',
+    'update-downloaded': 'ready',
+    cancelled: 'available',
+    canceled: 'available',
+    disabled: 'unsupported',
+    unavailable: 'unsupported',
+  };
+  const normalized = aliases[phase] || phase;
+  return new Set([
+    'idle', 'checking', 'current', 'available', 'downloading',
+    'ready', 'installing', 'error', 'unsupported',
+  ]).has(normalized) ? normalized : 'idle';
+}
+
+function normalizeCoreUpdateVersion(value) {
+  const version = String(value || '').trim().replace(/^v(?=\d)/i, '');
+  return /^[0-9A-Za-z.+-]{1,64}$/.test(version) ? version : '';
+}
+
+function collectCoreUpdateNoteText(value, output = [], depth = 0) {
+  if (value === null || value === undefined || depth > 3) return output;
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectCoreUpdateNoteText(item, output, depth + 1));
+    return output;
+  }
+  if (typeof value === 'object') {
+    for (const key of ['note', 'body', 'notes', 'releaseNotes', 'release_notes']) {
+      if (value[key] !== undefined) collectCoreUpdateNoteText(value[key], output, depth + 1);
+    }
+    return output;
+  }
+  output.push(String(value));
+  return output;
+}
+
+function normalizeCoreUpdateNotes(value) {
+  const notes = [];
+  for (const source of collectCoreUpdateNoteText(value)) {
+    const plain = source
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+    for (const line of plain.split(/\r?\n|•/)) {
+      const cleaned = line
+        .replace(/^\s{0,3}#{1,6}\s*/, '')
+        .replace(/^\s*(?:[-*+] |\d+[.)]\s*)/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!cleaned || notes.includes(cleaned)) continue;
+      notes.push(cleaned.length > 220 ? `${cleaned.slice(0, 217).trimEnd()}…` : cleaned);
+      if (notes.length === 4) return notes;
+    }
+  }
+  return notes;
+}
+
+function coreUpdateErrorKind(value) {
+  const message = String(value?.message || value || '').toLowerCase();
+  if (/checksum|sha(?:256|512)|signature|integrity|verif|подпис|провер/.test(message)) return 'verification';
+  if (/offline|network|internet|github|econn|enotfound|timed?\s*out|http|fetch|request/.test(message)) return 'offline';
+  return 'generic';
+}
+
+function normalizeCoreUpdatePayload(payload, fallbackPhase = '') {
+  const envelope = payload && typeof payload === 'object' ? payload : {};
+  const nestedState = envelope.state && typeof envelope.state === 'object' ? envelope.state : null;
+  const source = nestedState ? { ...envelope, ...nestedState } : envelope;
+  const info = source.updateInfo && typeof source.updateInfo === 'object'
+    ? source.updateInfo
+    : source.update_info && typeof source.update_info === 'object' ? source.update_info : {};
+  const progress = source.progress && typeof source.progress === 'object' ? source.progress : {};
+  const rawPhase = source.phase
+    || source.status
+    || source.event
+    || source.type
+    || (typeof source.state === 'string' ? source.state : '')
+    || fallbackPhase
+    || 'idle';
+  const next = {
+    phase: normalizeCoreUpdatePhase(rawPhase),
+  };
+  if (source.supported === false) next.phase = 'unsupported';
+
+  const currentVersion = normalizeCoreUpdateVersion(
+    source.currentVersion ?? source.current_version ?? source.installedVersion ?? source.installed_version,
+  );
+  if (currentVersion) next.currentVersion = currentVersion;
+
+  const versionCandidate = source.availableVersion
+    ?? source.available_version
+    ?? source.latestVersion
+    ?? source.latest_version
+    ?? info.version
+    ?? (['available', 'downloading', 'ready', 'installing'].includes(next.phase) ? source.version : '');
+  const availableVersion = normalizeCoreUpdateVersion(versionCandidate);
+  if (availableVersion) next.availableVersion = availableVersion;
+
+  const percent = Number(source.percent ?? source.downloadPercent ?? source.download_percent ?? progress.percent);
+  if (Number.isFinite(percent)) next.percent = Math.max(0, Math.min(100, percent));
+  const transferred = Number(source.transferred ?? source.transferredBytes ?? source.transferred_bytes ?? progress.transferred);
+  if (Number.isFinite(transferred)) next.transferred = Math.max(0, transferred);
+  const total = Number(source.total ?? source.totalBytes ?? source.total_bytes ?? progress.total);
+  if (Number.isFinite(total)) next.total = Math.max(0, total);
+
+  const noteSource = source.releaseNotes ?? source.release_notes ?? info.releaseNotes ?? info.release_notes;
+  if (noteSource !== undefined) next.releaseNotes = normalizeCoreUpdateNotes(noteSource);
+  const checkedAt = source.checkedAt ?? source.checked_at;
+  if (checkedAt && !Number.isNaN(new Date(checkedAt).getTime())) next.checkedAt = new Date(checkedAt).toISOString();
+  const installIssue = source.installIssue ?? source.install_issue ?? source.issue;
+  if (typeof installIssue === 'string') {
+    next.installIssue = installIssue
+      .replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 280);
+  }
+  const error = source.error ?? source.message;
+  if (next.phase === 'error' || error) next.errorKind = coreUpdateErrorKind(error);
+  return next;
+}
+
+function applyCoreUpdatePayload(payload, fallbackPhase = '') {
+  const next = normalizeCoreUpdatePayload(payload, fallbackPhase);
+  state.coreUpdate = { ...state.coreUpdate, ...next };
+  if (next.phase === 'current') {
+    state.coreUpdate.availableVersion = '';
+    state.coreUpdate.releaseNotes = [];
+    state.coreUpdate.percent = 0;
+    state.coreUpdate.transferred = 0;
+    state.coreUpdate.total = 0;
+  }
+  if (['current', 'available'].includes(next.phase) && !next.checkedAt) {
+    state.coreUpdate.checkedAt = new Date().toISOString();
+  }
+  renderCoreUpdateGuide();
+  announceCoreUpdateIfReady();
+}
+
+function announceCoreUpdateIfReady() {
+  const version = state.coreUpdate.availableVersion;
+  if (
+    state.startupVaultGate
+    || state.coreUpdate.phase !== 'available'
+    || !version
+    || state.coreUpdateNotifiedVersion === version
+  ) return;
+  state.coreUpdateNotifiedVersion = version;
+  toast(`Вышло обновление Soft Hub v${version}. Оно ждёт вас в Настройках.`, 'success', 7600);
+}
+
+function formatCoreUpdateBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+  let amount = bytes;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: amount < 10 && unit > 0 ? 1 : 0 }).format(amount)} ${units[unit]}`;
+}
+
+function coreUpdateCheckedLabel(value) {
+  const date = new Date(value || '');
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+function coreUpdatePresentation(phase, update) {
+  const currentVersion = update.currentVersion || state.data?.app?.version || '';
+  const availableVersion = update.availableVersion || '';
+  const currentLabel = currentVersion ? `v${currentVersion}` : 'текущая версия';
+  const targetLabel = availableVersion ? `v${availableVersion}` : 'новая версия';
+  const checkedAt = coreUpdateCheckedLabel(update.checkedAt);
+  const activeCount = Number(state.data?.stats?.active_runs || 0);
+  const platform = state.data?.app?.platform;
+  const readyCopy = update.installIssue || (platform === 'darwin'
+    ? 'Hub закроется и откроет проверенный DMG. Перетащите Soft Hub в Applications и подтвердите замену — ваши данные останутся на месте.'
+    : platform === 'win32'
+      ? 'Hub закроется и запустит проверенный установщик. Завершите установку — ваши данные останутся на месте.'
+      : 'Hub закроется и откроет проверенный установщик. Аккаунты, ключи, софты, история и результаты останутся на месте.');
+  const installingCopy = platform === 'darwin'
+    ? 'Закрываем Hub и открываем проверенный DMG…'
+    : platform === 'win32'
+      ? 'Закрываем Hub и запускаем проверенный установщик…'
+      : 'Закрываем Hub и запускаем проверенное обновление…';
+  const effectivePhase = phase === 'ready' && activeCount > 0 ? 'blocked' : phase;
+  const presentations = {
+    idle: {
+      stateLabel: 'ГОТОВ К ПРОВЕРКЕ',
+      title: 'Проверим, есть ли новая версия',
+      copy: 'Hub сам посмотрит официальный GitHub. Скачивание и установка начнутся только после вашего разрешения.',
+      primary: ['check', 'Проверить обновления', 'ink'],
+    },
+    checking: {
+      stateLabel: 'ИЩЕМ ВЕРСИЮ',
+      title: 'Ищем новую версию…',
+      copy: `Сейчас стоит ${currentLabel}. Hub только проверяет GitHub — ничего не скачивает и не устанавливает.`,
+      primary: ['checking', 'Проверяем…', 'quiet', true],
+      busy: true,
+    },
+    current: {
+      stateLabel: 'ВСЁ АКТУАЛЬНО',
+      title: 'У вас свежая версия',
+      copy: `${currentLabel}${checkedAt ? ` · проверено в ${checkedAt}` : ''}. Можно спокойно продолжать работу.`,
+      primary: ['check', 'Проверить ещё раз', 'quiet'],
+    },
+    available: {
+      stateLabel: 'ЕСТЬ ОБНОВЛЕНИЕ',
+      title: `Вышла версия ${targetLabel}`,
+      copy: 'Скачаем её с официального GitHub, проверим и установим только после вашего подтверждения.',
+      primary: ['download', `Скачать ${targetLabel}`, 'ink'],
+    },
+    downloading: {
+      stateLabel: 'СКАЧИВАЕМ',
+      title: `Скачиваем ${targetLabel}…`,
+      copy: 'Можно продолжать пользоваться Hub. Перед установкой мы отдельно спросим разрешение.',
+      primary: ['cancel', 'Отменить загрузку', 'quiet'],
+      busy: true,
+    },
+    ready: {
+      stateLabel: update.installIssue ? 'НУЖНО ПОВТОРИТЬ' : 'ГОТОВО',
+      title: update.installIssue ? 'Обновление пока не запустилось' : `${targetLabel} готова к установке`,
+      copy: readyCopy,
+      primary: ['install', 'Установить обновление', 'ink'],
+    },
+    blocked: {
+      stateLabel: 'ЕСТЬ АКТИВНЫЕ ЗАПУСКИ',
+      title: `Сейчас ${activeCount} ${countWord(activeCount, 'запуск работает', 'запуска работают', 'запусков работают')}`,
+      copy: 'Дайте им закончить — после этого Hub можно будет безопасно обновить.',
+      primary: ['activity', 'Посмотреть запуски', 'ink'],
+    },
+    installing: {
+      stateLabel: 'ОБНОВЛЯЕМ',
+      title: `Готовим ${targetLabel}…`,
+      copy: installingCopy,
+      primary: ['installing', 'Обновляем…', 'quiet', true],
+      busy: true,
+    },
+    error: {
+      stateLabel: 'НЕ ПОЛУЧИЛОСЬ',
+      title: update.errorKind === 'verification' ? 'Файл не прошёл проверку' : 'Не получилось проверить обновление',
+      copy: update.errorKind === 'verification'
+        ? 'Мы остановили установку. Текущая версия и ваши данные не изменились.'
+        : update.errorKind === 'offline'
+          ? 'Проверьте интернет и попробуйте ещё раз. Hub продолжит работать как обычно.'
+          : 'Hub не смог закончить обновление. Текущая версия и ваши данные остались на месте.',
+      primary: [update.errorKind === 'verification' ? 'download' : 'check', update.errorKind === 'verification' ? 'Скачать заново' : 'Попробовать снова', 'ink'],
+      secondary: ['guide', 'Открыть инструкцию'],
+    },
+    unsupported: {
+      stateLabel: 'РУЧНОЙ РЕЖИМ',
+      title: 'Встроенное обновление здесь недоступно',
+      copy: 'Если это тестовая сборка, так и задумано. Для этой версии можно воспользоваться обычным установщиком.',
+      primary: ['guide', 'Открыть инструкцию', 'quiet'],
+    },
+  };
+  return { phase: effectivePhase, ...presentations[effectivePhase] };
+}
+
+function renderCoreUpdateNotes(visible) {
+  const details = $('#core-update-notes');
+  const list = $('#core-update-notes-list');
+  const notes = state.coreUpdate.releaseNotes || [];
+  const signature = notes.join('\n');
+  if (list.dataset.signature !== signature) {
+    list.replaceChildren(...notes.map((note) => {
+      const item = document.createElement('li');
+      item.textContent = note;
+      return item;
+    }));
+    list.dataset.signature = signature;
+  }
+  details.hidden = !visible || notes.length === 0;
+  if (details.hidden) details.open = false;
+}
+
+function configureCoreUpdateButton(button, config, secondary = false) {
+  if (!config) {
+    button.hidden = true;
+    button.disabled = false;
+    delete button.dataset.coreUpdateAction;
+    return;
+  }
+  const [action, label, tone = 'quiet', disabled = false] = config;
+  button.hidden = false;
+  button.disabled = disabled;
+  button.dataset.coreUpdateAction = action;
+  button.textContent = label;
+  button.className = `button button--${tone}${!secondary && tone === 'ink' ? ' specular-button' : ''}`;
+}
+
 function renderCoreUpdateGuide() {
   if (!state.data?.app) return;
-  $('#settings-app-version').textContent = `v${state.data.app.version}`;
+  const update = state.coreUpdate;
+  update.currentVersion = update.currentVersion || state.data.app.version;
+  const requestedPhase = update.bridgeAvailable === false ? 'unsupported' : update.phase;
+  const presentation = coreUpdatePresentation(requestedPhase, update);
+  const card = $('#core-update-card');
+  card.dataset.state = presentation.phase;
+  card.setAttribute('aria-busy', String(Boolean(presentation.busy)));
+  setTextIfChanged($('#settings-app-version'), `v${update.currentVersion || state.data.app.version}`);
+  setTextIfChanged($('#core-update-state'), presentation.stateLabel);
+  $('#core-update-state').dataset.state = presentation.phase;
+  setTextIfChanged($('#core-update-title'), presentation.title);
+  setTextIfChanged($('#core-update-copy'), presentation.copy);
+  configureCoreUpdateButton($('#core-update-primary'), presentation.primary);
+  configureCoreUpdateButton($('#core-update-secondary'), presentation.secondary, true);
+
+  const showProgress = presentation.phase === 'downloading';
+  const progressWrap = $('#core-update-progress');
+  const progressBar = $('#core-update-progress-bar');
+  const percent = Math.round(Math.max(0, Math.min(100, Number(update.percent || 0))));
+  const transferred = formatCoreUpdateBytes(update.transferred);
+  const total = formatCoreUpdateBytes(update.total);
+  const progressCopy = transferred && total ? `${percent}% · ${transferred} из ${total}` : `${percent}%`;
+  progressWrap.hidden = !showProgress;
+  progressBar.value = percent;
+  progressBar.textContent = `${percent}%`;
+  progressBar.setAttribute('aria-label', `Загрузка обновления: ${percent}%`);
+  setTextIfChanged($('#core-update-progress-copy'), progressCopy);
+  renderCoreUpdateNotes(['available', 'downloading', 'ready', 'blocked'].includes(presentation.phase));
+  const updateVisible = ['available', 'downloading', 'ready', 'blocked'].includes(presentation.phase);
+  const settingsNav = $('.nav-item[data-view="settings"]');
+  const updateBadge = $('#nav-core-update');
+  settingsNav.dataset.updateAvailable = String(updateVisible);
+  settingsNav.setAttribute('aria-label', updateVisible && update.availableVersion
+    ? `Настройки — доступно обновление v${update.availableVersion}`
+    : 'Настройки');
+  updateBadge.textContent = updateVisible ? 'NEW' : '';
+
   const platform = state.data.app.platform;
   $('#settings-update-platform').textContent = platform === 'darwin'
     ? 'Откройте новый DMG, перетащите Soft Hub в Applications и подтвердите замену.'
     : platform === 'win32'
       ? 'Запустите новый EXE поверх текущей установки. Другую папку выбирать не нужно.'
       : 'Откройте установщик для своей системы и замените текущую версию приложения.';
+}
+
+function setCoreUpdateFailure(error) {
+  applyCoreUpdatePayload({
+    phase: 'error',
+    error: error instanceof Error ? error.message : String(error || ''),
+  });
+}
+
+function openCoreUpdateGuide() {
+  const guide = $('#core-update-guide');
+  guide.open = true;
+  $('summary', guide)?.focus({ preventScroll: true });
+  guide.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+}
+
+function openRunsBlockingCoreUpdate(origin) {
+  openActivityPanel('active', origin || $('#core-update-primary'));
+}
+
+async function checkCoreUpdate() {
+  const updater = coreUpdaterBridge();
+  if (!updater || typeof updater.check !== 'function') {
+    state.coreUpdate.bridgeAvailable = false;
+    applyCoreUpdatePayload({ phase: 'unsupported' });
+    return;
+  }
+  state.coreUpdate.bridgeAvailable = true;
+  applyCoreUpdatePayload({}, 'checking');
+  try {
+    const payload = await updater.check();
+    if (payload && typeof payload === 'object') applyCoreUpdatePayload(payload);
+  } catch (error) {
+    setCoreUpdateFailure(error);
+  }
+}
+
+async function downloadCoreUpdate() {
+  const updater = coreUpdaterBridge();
+  if (!updater || typeof updater.download !== 'function') {
+    state.coreUpdate.bridgeAvailable = false;
+    applyCoreUpdatePayload({ phase: 'unsupported' });
+    return;
+  }
+  applyCoreUpdatePayload({}, 'downloading');
+  try {
+    const payload = await updater.download();
+    if (payload && typeof payload === 'object') applyCoreUpdatePayload(payload);
+  } catch (error) {
+    setCoreUpdateFailure(error);
+  }
+}
+
+async function cancelCoreUpdateDownload() {
+  const updater = coreUpdaterBridge();
+  const cancel = updater?.cancel || updater?.cancelDownload;
+  if (typeof cancel !== 'function') {
+    setCoreUpdateFailure(new Error('Загрузка не поддерживает отмену'));
+    return;
+  }
+  try {
+    const payload = await cancel.call(updater);
+    applyCoreUpdatePayload(payload && typeof payload === 'object' ? payload : {}, 'available');
+  } catch (error) {
+    setCoreUpdateFailure(error);
+  }
+}
+
+async function installCoreUpdate(origin) {
+  const activeCount = Number(state.data?.stats?.active_runs || 0);
+  if (activeCount > 0) {
+    openRunsBlockingCoreUpdate(origin);
+    return;
+  }
+  const version = state.coreUpdate.availableVersion;
+  const platform = state.data?.app?.platform;
+  const installMessage = platform === 'darwin'
+    ? 'Hub закроется и откроет проверенный DMG. Перетащите Soft Hub в Applications и подтвердите замену. Аккаунты, ключи, софты, история и результаты останутся на месте.'
+    : platform === 'win32'
+      ? 'Hub закроется и запустит проверенный установщик. Завершите установку в открывшемся окне — ваши данные останутся на месте.'
+      : 'Hub закроется и откроет проверенный установщик. Ваши данные останутся на месте.';
+  const confirmed = await requestDestructiveConfirmation({
+    title: `Установить Soft Hub${version ? ` v${version}` : ''}?`,
+    message: installMessage,
+    confirmLabel: platform === 'darwin' ? 'Закрыть Hub и открыть DMG' : 'Запустить установщик',
+    tone: 'update',
+  });
+  if (!confirmed) return;
+  await refresh();
+  if (Number(state.data?.stats?.active_runs || 0) > 0) {
+    openRunsBlockingCoreUpdate(origin);
+    return;
+  }
+  const updater = coreUpdaterBridge();
+  if (!updater || typeof updater.install !== 'function') {
+    state.coreUpdate.bridgeAvailable = false;
+    applyCoreUpdatePayload({ phase: 'unsupported' });
+    return;
+  }
+  applyCoreUpdatePayload({}, 'installing');
+  try {
+    const payload = await updater.install();
+    if (payload && typeof payload === 'object') applyCoreUpdatePayload(payload);
+    // A recoverable refusal can lock Vault in the main process. Refresh now so
+    // protected renderer state is purged and the unlock gate is immediately
+    // consistent with the core instead of waiting for background polling.
+    if (state.coreUpdate.phase !== 'installing') await refresh();
+  } catch (error) {
+    setCoreUpdateFailure(error);
+    await refresh();
+  }
+}
+
+function handleCoreUpdateAction(event) {
+  const button = event.currentTarget;
+  const action = button.dataset.coreUpdateAction;
+  if (action === 'check') void checkCoreUpdate();
+  else if (action === 'download') void downloadCoreUpdate();
+  else if (action === 'cancel') void cancelCoreUpdateDownload();
+  else if (action === 'install') void installCoreUpdate(button);
+  else if (action === 'activity') openRunsBlockingCoreUpdate(button);
+  else if (action === 'guide') openCoreUpdateGuide();
+}
+
+function subscribeToCoreUpdateState(updater) {
+  const subscribe = updater?.onStateChanged || updater?.onStateChange;
+  if (typeof subscribe !== 'function') return;
+  const listener = (...values) => {
+    let payload = null;
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      if (values[index] && typeof values[index] === 'object') {
+        payload = values[index];
+        break;
+      }
+    }
+    if (payload) applyCoreUpdatePayload(payload);
+  };
+  const unsubscribe = subscribe.call(updater, listener);
+  if (typeof unsubscribe === 'function') state.coreUpdateUnsubscribe = unsubscribe;
+}
+
+async function initializeCoreUpdater() {
+  if (state.coreUpdateAutoCheckStarted) return;
+  state.coreUpdateAutoCheckStarted = true;
+  const updater = coreUpdaterBridge();
+  if (!updater || typeof updater.check !== 'function') {
+    state.coreUpdate.bridgeAvailable = false;
+    applyCoreUpdatePayload({ phase: 'unsupported' });
+    return;
+  }
+  state.coreUpdate.bridgeAvailable = true;
+  subscribeToCoreUpdateState(updater);
+  try {
+    if (typeof updater.getState === 'function') {
+      const payload = await updater.getState();
+      if (payload && typeof payload === 'object') applyCoreUpdatePayload(payload);
+    }
+  } catch (error) {
+    setCoreUpdateFailure(error);
+  }
+  if (!['available', 'downloading', 'ready', 'installing'].includes(state.coreUpdate.phase)) {
+    await checkCoreUpdate();
+  }
 }
 
 function renderDock() {
@@ -2137,14 +2665,20 @@ function setActivityFilter(filter) {
   renderActivityPanel();
 }
 
+function resolveActivityFilter(filter = 'active') {
+  if (filter !== 'auto') return filter === 'attention' ? 'attention' : 'active';
+  const attentionCount = state.activityAccountsLoaded
+    ? activityRows('attention').length
+    : Number(state.data?.stats.attention_runs || 0);
+  return attentionCount ? 'attention' : 'active';
+}
+
 function openActivityPanel(filter = 'active', origin = document.activeElement) {
   const panel = $('#activity-panel');
   if (!$('#run-drawer').hidden || state.selectedRunId) {
     closeRunDrawer({ restoreFocus: false, immediate: true });
   }
-  const resolvedFilter = filter === 'auto'
-    ? ((state.activityAccountsLoaded ? activityRows('attention').length : Number(state.data?.stats.attention_runs || 0)) ? 'attention' : 'active')
-    : filter;
+  const resolvedFilter = resolveActivityFilter(filter);
   if (panel.hidden && origin instanceof HTMLElement && !panel.contains(origin)) {
     state.activityFocusOrigin = origin;
   }
@@ -2156,6 +2690,17 @@ function openActivityPanel(filter = 'active', origin = document.activeElement) {
   setActivityFilter(resolvedFilter);
   void loadActivityAccounts({ silent: state.activityAccountsLoaded });
   window.requestAnimationFrame(() => $('#activity-panel-close').focus({ preventScroll: true }));
+}
+
+function toggleActivityPanel(filter = 'active', origin = document.activeElement) {
+  const panel = $('#activity-panel');
+  const resolvedFilter = resolveActivityFilter(filter);
+  const fullyOpen = !panel.hidden && !panel.classList.contains('is-closing');
+  if (fullyOpen && state.activityFilter === resolvedFilter) {
+    closeActivityPanel();
+    return;
+  }
+  openActivityPanel(resolvedFilter, origin);
 }
 
 function closeActivityPanel({ restoreFocus = true, immediate = false } = {}) {
@@ -2899,13 +3444,18 @@ function refresh(options = {}) {
   return promise;
 }
 
-function requestDestructiveConfirmation({ title, message, confirmLabel, phrase = '' }) {
+function requestDestructiveConfirmation({ title, message, confirmLabel, phrase = '', tone = 'danger' }) {
   if (state.destructiveRequest) return Promise.resolve(false);
   return new Promise((resolve) => {
     state.destructiveRequest = { resolve, phrase };
+    const modal = $('#destructive-modal');
+    const submit = $('#destructive-submit');
+    modal.dataset.tone = tone === 'update' ? 'update' : 'danger';
     $('#destructive-modal-title').textContent = title;
     $('#destructive-modal-copy').textContent = message;
-    $('#destructive-submit').textContent = confirmLabel;
+    submit.textContent = confirmLabel;
+    submit.classList.toggle('button--danger', tone !== 'update');
+    submit.classList.toggle('button--ink', tone === 'update');
     $('#destructive-phrase-label').hidden = !phrase;
     $('#destructive-phrase').required = Boolean(phrase);
     $('#destructive-phrase').value = '';
@@ -2939,6 +3489,7 @@ function handleDestructiveSubmit(event) {
 
 function openModal(id) {
   if (!$('#activity-panel').hidden) closeActivityPanel({ restoreFocus: false, immediate: true });
+  if (!$('#run-drawer').hidden || state.selectedRunId) closeRunDrawer({ restoreFocus: false, immediate: true });
   if (!$('.modal:not([hidden])') && $('#run-drawer').hidden) {
     rememberFocusOrigin();
   }
@@ -3100,6 +3651,7 @@ function setStartupVaultGate(required) {
   $('#vault-modal').dataset.startupRequired = String(state.startupVaultGate);
   $('#vault-modal-close').hidden = state.startupVaultGate;
   if (!state.startupVaultGate) $('#vault-entry-loader').hidden = true;
+  if (!state.startupVaultGate) announceCoreUpdateIfReady();
 }
 
 function openVaultModal({ startupRequired = false } = {}) {
@@ -3753,9 +4305,67 @@ function syncRunConcurrency(action, { reset = false } = {}) {
 }
 
 function optionNumberStep(type, field) {
-  if (type === 'integer') return '1';
   const multiple = Number(field.multipleOf);
-  return Number.isFinite(multiple) && multiple > 0 ? String(multiple) : 'any';
+  if (Number.isFinite(multiple) && multiple > 0 && (type !== 'integer' || Number.isSafeInteger(multiple))) return String(multiple);
+  return type === 'integer' ? '1' : 'any';
+}
+
+function optionDecimalPlaces(value) {
+  const text = String(value).toLowerCase();
+  if (text.includes('e')) {
+    const [coefficient, exponentText] = text.split('e');
+    const decimals = (coefficient.split('.')[1] || '').length;
+    return Math.max(0, decimals - Number(exponentText));
+  }
+  return (text.split('.')[1] || '').length;
+}
+
+function optionCleanNumber(value, precision = 10) {
+  return String(Number(Number(value).toFixed(precision)));
+}
+
+function optionSliderConfig(type, field) {
+  const declaredMinimum = Number(field.minimum);
+  const declaredMaximum = Number(field.maximum);
+  if (!Number.isFinite(declaredMinimum) || !Number.isFinite(declaredMaximum) || declaredMaximum <= declaredMinimum) return null;
+  const explicitMultiple = Number(field.multipleOf);
+  const hasExplicitMultiple = Number.isFinite(explicitMultiple) && explicitMultiple > 0;
+  let step = hasExplicitMultiple ? explicitMultiple : type === 'integer' ? 1 : 0;
+  if (type === 'integer' && !Number.isSafeInteger(step)) return null;
+  if (!step) {
+    const roughStep = (declaredMaximum - declaredMinimum) / 100;
+    const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+    const normalized = roughStep / magnitude;
+    const niceStep = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+    step = niceStep * magnitude;
+  }
+  const precision = Math.min(10, Math.max(
+    optionDecimalPlaces(declaredMinimum),
+    optionDecimalPlaces(declaredMaximum),
+    optionDecimalPlaces(step),
+  ));
+  const alignsToMultiple = hasExplicitMultiple || type === 'integer';
+  const minimum = alignsToMultiple
+    ? Math.ceil((declaredMinimum / step) - 1e-9) * step
+    : declaredMinimum;
+  const maximum = alignsToMultiple
+    ? Math.floor((declaredMaximum / step) + 1e-9) * step
+    : declaredMaximum;
+  const tickCount = (maximum - minimum) / step;
+  if (
+    !Number.isFinite(minimum)
+    || !Number.isFinite(maximum)
+    || maximum <= minimum
+    || !Number.isFinite(tickCount)
+    || tickCount > 1000
+    || (type === 'integer' && ![minimum, maximum, step].every(Number.isSafeInteger))
+  ) return null;
+  return {
+    minimum: Number(optionCleanNumber(minimum, precision)),
+    maximum: Number(optionCleanNumber(maximum, precision)),
+    step: Number(optionCleanNumber(step, precision)),
+    precision,
+  };
 }
 
 function optionUi(field) {
@@ -3784,6 +4394,70 @@ function optionEntries(action) {
 function optionValueLabel(value) {
   if (typeof value === 'boolean') return value ? 'Включено' : 'Выключено';
   return String(value);
+}
+
+function optionNumericInputMarkup(key, field, type, title, isRequired, unit, extraClass = '') {
+  const placeholderBase = String(optionUi(field).placeholder || (field.default !== undefined ? `Например, ${field.default}` : '')).trim();
+  const placeholder = placeholderBase && !placeholderBase.endsWith('…') ? `${placeholderBase}…` : placeholderBase;
+  return `<span class="option-input-shell option-number-shell ${escapeHtml(extraClass)}"><input id="run-option-${escapeHtml(key)}" class="option-number-input" type="number" name="option-${escapeHtml(key)}" autocomplete="off" data-option-key="${escapeHtml(key)}" data-option-type="${escapeHtml(type)}" data-option-label="${escapeHtml(title)}" data-option-required="${isRequired}" data-option-multiple="${escapeHtml(field.multipleOf ?? '')}" value="${escapeHtml(field.default ?? '')}" placeholder="${escapeHtml(placeholder)}" step="${escapeHtml(optionNumberStep(type, field))}" inputmode="${type === 'integer' ? 'numeric' : 'decimal'}" min="${escapeHtml(field.minimum)}" max="${escapeHtml(field.maximum)}"/>${unit ? `<span>${escapeHtml(unit)}</span>` : ''}</span>`;
+}
+
+function optionSingleSliderMarkup(key, field, type, title, isRequired, unit) {
+  const config = optionSliderConfig(type, field);
+  if (!config) return optionNumericInputMarkup(key, field, type, title, isRequired, unit);
+  const initialValue = field.default !== undefined ? Number(field.default) : config.minimum;
+  const safeInitial = Math.max(config.minimum, Math.min(config.maximum, initialValue));
+  const span = config.maximum - config.minimum;
+  const progress = safeInitial - config.minimum;
+  return `<div class="option-slider-control" data-option-slider-control>
+    <div class="option-slider-readout"><span class="option-slider-limit">${escapeHtml(optionCleanNumber(config.minimum, config.precision))}</span>${optionNumericInputMarkup(key, field, type, title, isRequired, unit, 'option-slider-value')}<span class="option-slider-limit">${escapeHtml(optionCleanNumber(config.maximum, config.precision))}</span></div>
+    <div class="option-slider-track"><progress data-option-slider-progress max="${escapeHtml(optionCleanNumber(span, config.precision))}" value="${escapeHtml(optionCleanNumber(progress, config.precision))}" aria-hidden="true"></progress><input type="range" data-option-slider aria-label="${escapeHtml(title)}" min="${escapeHtml(optionCleanNumber(config.minimum, config.precision))}" max="${escapeHtml(optionCleanNumber(config.maximum, config.precision))}" step="${escapeHtml(optionCleanNumber(config.step, config.precision))}" value="${escapeHtml(optionCleanNumber(safeInitial, config.precision))}"/></div>
+  </div>`;
+}
+
+function optionRangePair(fields, startIndex) {
+  const [, field] = fields[startIndex];
+  const ui = optionUi(field);
+  const descriptor = ui.range;
+  if (ui.control !== 'dual_range' || !descriptor?.id) return null;
+  const members = fields.filter(([, candidate]) => {
+    const candidateUi = optionUi(candidate);
+    return candidateUi.control === 'dual_range' && candidateUi.range?.id === descriptor.id;
+  });
+  if (members.length !== 2) return null;
+  const lower = members.find(([, candidate]) => optionUi(candidate).range?.role === 'from');
+  const upper = members.find(([, candidate]) => optionUi(candidate).range?.role === 'to');
+  if (!lower || !upper) return null;
+  return { lower, upper, group: descriptor.id };
+}
+
+function optionRangeFieldMarkup(pair, required) {
+  const [[lowerKey, lowerField], [upperKey, upperField]] = [pair.lower, pair.upper];
+  const lowerUi = optionUi(lowerField);
+  const upperUi = optionUi(upperField);
+  const type = lowerField.type || 'number';
+  const title = String(lowerField.title || upperField.title || pair.group);
+  const unit = String(lowerUi.unit || upperUi.unit || '').trim();
+  const config = optionSliderConfig(type, lowerField);
+  if (!config) return optionFieldMarkup(lowerKey, lowerField, required) + optionFieldMarkup(upperKey, upperField, required);
+  const lowerRequired = required.has(lowerKey);
+  const upperRequired = required.has(upperKey);
+  const badge = lowerRequired || upperRequired ? '<i class="option-required">нужно</i>' : '<i class="option-optional">можно пропустить</i>';
+  const lowerInitial = Math.max(config.minimum, Math.min(config.maximum, Number(lowerField.default ?? config.minimum)));
+  const upperInitial = Math.max(lowerInitial, Math.min(config.maximum, Number(upperField.default ?? config.maximum)));
+  const span = config.maximum - config.minimum;
+  const descriptions = [...new Set([lowerField.description, upperField.description].map((value) => String(value || '').trim()).filter(Boolean))];
+  descriptions.push(`Можно выбрать: ${optionCleanNumber(config.minimum, config.precision)}–${optionCleanNumber(config.maximum, config.precision)}${unit ? ` ${unit}` : ''}`);
+  const help = descriptions.join(' · ');
+  const lowerInput = optionNumericInputMarkup(lowerKey, lowerField, type, lowerField.title || lowerKey, lowerRequired, unit, 'option-range-value');
+  const upperInput = optionNumericInputMarkup(upperKey, upperField, type, upperField.title || upperKey, upperRequired, unit, 'option-range-value');
+  return `<fieldset class="option-field option-field--range option-field--wide" data-option-range-group="${escapeHtml(pair.group)}"><legend class="sr-only">${escapeHtml(title)}</legend>
+    <span class="option-field-head"><strong>${escapeHtml(title)}</strong>${badge}</span>
+    <div class="option-range-readouts"><label for="run-option-${escapeHtml(lowerKey)}"><span>ОТ</span>${lowerInput}</label><i aria-hidden="true"></i><label for="run-option-${escapeHtml(upperKey)}"><span>ДО</span>${upperInput}</label></div>
+    <div class="option-range-track" data-option-range-track><progress class="option-range-progress option-range-progress--maximum" data-option-range-progress="maximum" max="${escapeHtml(optionCleanNumber(span, config.precision))}" value="${escapeHtml(optionCleanNumber(upperInitial - config.minimum, config.precision))}" aria-hidden="true"></progress><progress class="option-range-progress option-range-progress--minimum" data-option-range-progress="minimum" max="${escapeHtml(optionCleanNumber(span, config.precision))}" value="${escapeHtml(optionCleanNumber(lowerInitial - config.minimum, config.precision))}" aria-hidden="true"></progress><input type="range" data-option-range-slider="minimum" aria-label="${escapeHtml(`${title}, от`)}" min="${escapeHtml(optionCleanNumber(config.minimum, config.precision))}" max="${escapeHtml(optionCleanNumber(config.maximum, config.precision))}" step="${escapeHtml(optionCleanNumber(config.step, config.precision))}" value="${escapeHtml(optionCleanNumber(lowerInitial, config.precision))}"/><input type="range" data-option-range-slider="maximum" aria-label="${escapeHtml(`${title}, до`)}" min="${escapeHtml(optionCleanNumber(config.minimum, config.precision))}" max="${escapeHtml(optionCleanNumber(config.maximum, config.precision))}" step="${escapeHtml(optionCleanNumber(config.step, config.precision))}" value="${escapeHtml(optionCleanNumber(upperInitial, config.precision))}"/></div>
+    <div class="option-range-limits" aria-hidden="true"><span>${escapeHtml(optionCleanNumber(config.minimum, config.precision))}</span><span>${escapeHtml(optionCleanNumber(config.maximum, config.precision))}</span></div>
+    <small class="field-help">${escapeHtml(help)}</small>
+  </fieldset>`;
 }
 
 function optionFieldMarkup(key, field, required) {
@@ -3818,8 +4492,6 @@ function optionFieldMarkup(key, field, required) {
   }
 
   const numeric = ['integer', 'number'].includes(type);
-  const inputType = numeric ? 'number' : 'text';
-  const step = numeric ? `step="${escapeHtml(optionNumberStep(type, field))}" inputmode="${type === 'integer' ? 'numeric' : 'decimal'}"` : '';
   const placeholderBase = String(ui.placeholder || (field.default !== undefined ? `Например, ${field.default}` : '')).trim();
   const placeholder = placeholderBase && !placeholderBase.endsWith('…') ? `${placeholderBase}…` : placeholderBase;
   const stringBounds = type === 'string'
@@ -3827,8 +4499,118 @@ function optionFieldMarkup(key, field, required) {
     : '';
   const control = ui.control === 'textarea' && type === 'string'
     ? `<textarea name="option-${escapeHtml(key)}" autocomplete="off" data-option-key="${escapeHtml(key)}" data-option-type="string" data-option-label="${escapeHtml(title)}" data-option-required="${isRequired}" placeholder="${escapeHtml(placeholder)}" ${stringBounds}>${escapeHtml(field.default ?? '')}</textarea>`
-    : `<span class="option-input-shell"><input type="${inputType}" name="option-${escapeHtml(key)}" autocomplete="off" data-option-key="${escapeHtml(key)}" data-option-type="${escapeHtml(type)}" data-option-label="${escapeHtml(title)}" data-option-required="${isRequired}" value="${escapeHtml(field.default ?? '')}" placeholder="${escapeHtml(placeholder)}" ${step} ${stringBounds} ${field.minimum !== undefined ? `min="${escapeHtml(field.minimum)}"` : ''} ${field.maximum !== undefined ? `max="${escapeHtml(field.maximum)}"` : ''}/>${unit ? `<span>${escapeHtml(unit)}</span>` : ''}</span>`;
+    : numeric
+      ? ui.control === 'input'
+        ? optionNumericInputMarkup(key, field, type, title, isRequired, unit)
+        : optionSingleSliderMarkup(key, field, type, title, isRequired, unit)
+      : `<span class="option-input-shell"><input type="text" name="option-${escapeHtml(key)}" autocomplete="off" data-option-key="${escapeHtml(key)}" data-option-type="${escapeHtml(type)}" data-option-label="${escapeHtml(title)}" data-option-required="${isRequired}" value="${escapeHtml(field.default ?? '')}" placeholder="${escapeHtml(placeholder)}" ${stringBounds}/></span>`;
   return `<label class="option-field"><span class="option-field-head"><strong>${escapeHtml(title)}</strong>${badge}</span>${control}<small class="field-help">${escapeHtml(help)}</small></label>`;
+}
+
+function optionGroupFieldsMarkup(fields, required) {
+  const consumed = new Set();
+  const markup = [];
+  fields.forEach(([key, field], index) => {
+    if (consumed.has(key)) return;
+    const pair = optionRangePair(fields, index);
+    if (pair) {
+      consumed.add(pair.lower[0]);
+      consumed.add(pair.upper[0]);
+      markup.push(optionRangeFieldMarkup(pair, required));
+      return;
+    }
+    consumed.add(key);
+    markup.push(optionFieldMarkup(key, field, required));
+  });
+  return markup.join('');
+}
+
+function optionSliderValue(value, slider) {
+  const minimum = Number(slider.min);
+  const maximum = Number(slider.max);
+  const precision = Math.min(10, Math.max(optionDecimalPlaces(slider.step), optionDecimalPlaces(slider.min), optionDecimalPlaces(slider.max)));
+  return optionCleanNumber(Math.max(minimum, Math.min(maximum, Number(value))), precision);
+}
+
+function syncOptionSingleProgress(slider) {
+  const progress = $('[data-option-slider-progress]', slider.closest('[data-option-slider-control]'));
+  progress.value = Math.max(0, Number(slider.value) - Number(slider.min));
+}
+
+function bindOptionSingleSliders(root) {
+  $$('[data-option-slider]', root).forEach((slider) => {
+    const control = slider.closest('[data-option-slider-control]');
+    const input = $('[data-option-key]', control);
+    const fromSlider = () => {
+      input.value = optionSliderValue(slider.value, slider);
+      input.removeAttribute('aria-invalid');
+      syncOptionSingleProgress(slider);
+    };
+    const fromInput = ({ commit = false } = {}) => {
+      if (!input.value.trim() || !Number.isFinite(Number(input.value))) return;
+      slider.value = optionSliderValue(input.value, slider);
+      if (commit) input.value = optionSliderValue(slider.value, slider);
+      syncOptionSingleProgress(slider);
+    };
+    slider.addEventListener('input', fromSlider);
+    input.addEventListener('input', () => fromInput());
+    input.addEventListener('change', () => fromInput({ commit: true }));
+    syncOptionSingleProgress(slider);
+  });
+}
+
+function syncOptionRange(group, role, rawValue, { commitInput = true } = {}) {
+  const slider = $(`[data-option-range-slider="${role}"]`, group);
+  const otherRole = role === 'minimum' ? 'maximum' : 'minimum';
+  const otherSlider = $(`[data-option-range-slider="${otherRole}"]`, group);
+  const input = role === 'minimum'
+    ? $$('[data-option-key]', group)[0]
+    : $$('[data-option-key]', group)[1];
+  let value = Number(optionSliderValue(rawValue, slider));
+  const otherValue = Number(otherSlider.value);
+  value = role === 'minimum' ? Math.min(value, otherValue) : Math.max(value, otherValue);
+  slider.value = optionSliderValue(value, slider);
+  const normalized = optionSliderValue(slider.value, slider);
+  if (commitInput) input.value = normalized;
+  input.removeAttribute('aria-invalid');
+  $('[data-option-range-progress="minimum"]', group).value = Math.max(0, Number($('[data-option-range-slider="minimum"]', group).value) - Number(slider.min));
+  $('[data-option-range-progress="maximum"]', group).value = Math.max(0, Number($('[data-option-range-slider="maximum"]', group).value) - Number(slider.min));
+}
+
+function bindOptionRangeSliders(root) {
+  $$('[data-option-range-group]', root).forEach((group) => {
+    const inputs = $$('[data-option-key]', group);
+    ['minimum', 'maximum'].forEach((role, index) => {
+      const slider = $(`[data-option-range-slider="${role}"]`, group);
+      const input = inputs[index];
+      slider.addEventListener('input', () => syncOptionRange(group, role, slider.value));
+      slider.addEventListener('focus', () => slider.classList.add('is-active'));
+      slider.addEventListener('blur', () => slider.classList.remove('is-active'));
+      input.addEventListener('input', () => {
+        if (input.value.trim() && Number.isFinite(Number(input.value))) syncOptionRange(group, role, input.value, { commitInput: false });
+      });
+      input.addEventListener('change', () => {
+        if (input.value.trim() && Number.isFinite(Number(input.value))) syncOptionRange(group, role, input.value);
+      });
+    });
+    $('[data-option-range-track]', group).addEventListener('pointerdown', (event) => {
+      if (event.target.closest('input[type="range"]')) return;
+      const track = event.currentTarget;
+      const lower = $('[data-option-range-slider="minimum"]', group);
+      const upper = $('[data-option-range-slider="maximum"]', group);
+      const bounds = track.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
+      const candidate = Number(lower.min) + ratio * (Number(lower.max) - Number(lower.min));
+      const role = Math.abs(candidate - Number(lower.value)) <= Math.abs(candidate - Number(upper.value)) ? 'minimum' : 'maximum';
+      syncOptionRange(group, role, candidate);
+      $(`[data-option-range-slider="${role}"]`, group).focus({ preventScroll: true });
+    });
+  });
+}
+
+function bindOptionSliders(root) {
+  bindOptionSingleSliders(root);
+  bindOptionRangeSliders(root);
 }
 
 function renderRunOptions(action) {
@@ -3849,7 +4631,8 @@ function renderRunOptions(action) {
     if (!groups.has(group)) groups.set(group, { advanced: Boolean(ui.advanced), fields: [] });
     groups.get(group).fields.push([key, field]);
   });
-  root.innerHTML = [...groups.entries()].map(([name, group]) => `<section class="option-group ${group.advanced ? 'option-group--advanced' : ''}"><header><span><strong>${escapeHtml(name)}</strong><small>${group.advanced ? 'Лучше не менять без причины' : 'Настройки для этого запуска'}</small></span><i>${String(group.fields.length).padStart(2, '0')}</i></header><div class="option-grid">${group.fields.map(([key, field]) => optionFieldMarkup(key, field, required)).join('')}</div></section>`).join('');
+  root.innerHTML = [...groups.entries()].map(([name, group]) => `<section class="option-group ${group.advanced ? 'option-group--advanced' : ''}"><header><span><strong>${escapeHtml(name)}</strong><small>${group.advanced ? 'Лучше не менять без причины' : 'Настройки для этого запуска'}</small></span><i>${String(group.fields.length).padStart(2, '0')}</i></header><div class="option-grid">${optionGroupFieldsMarkup(group.fields, required)}</div></section>`).join('');
+  bindOptionSliders(root);
 }
 
 function updateRunForm({ applyAccountDefault = false } = {}) {
@@ -3897,7 +4680,7 @@ function collectOptions() {
       }
       if (type === 'integer' || type === 'number') {
         const value = Number(raw);
-        if (!Number.isFinite(value) || (type === 'integer' && !Number.isInteger(value))) {
+        if (!Number.isFinite(value) || (type === 'integer' && !Number.isSafeInteger(value))) {
           field.setAttribute('aria-invalid', 'true');
           field.focus();
           throw new Error(`В поле «${label}» нужно указать ${type === 'integer' ? 'целое число' : 'число'}`);
@@ -3914,6 +4697,15 @@ function collectOptions() {
           field.focus();
           throw new Error(`Максимум для «${label}» — ${field.max}`);
         }
+        const multiple = Number(field.dataset.optionMultiple);
+        if (Number.isFinite(multiple) && multiple > 0) {
+          const quotient = value / multiple;
+          if (!Number.isFinite(quotient) || Math.abs(quotient - Math.round(quotient)) > 1e-9) {
+            field.setAttribute('aria-invalid', 'true');
+            field.focus();
+            throw new Error(`Шаг для «${label}» — ${field.dataset.optionMultiple}`);
+          }
+        }
         options[key] = value;
       } else {
         if (field.minLength >= 0 && raw.length < field.minLength) {
@@ -3928,6 +4720,16 @@ function collectOptions() {
         }
         options[key] = raw;
       }
+    }
+  });
+  $$('[data-option-range-group]', $('#run-options')).forEach((group) => {
+    const [fromField, toField] = $$('[data-option-key]', group);
+    if (!fromField || !toField || !fromField.value.trim() || !toField.value.trim()) return;
+    if (Number(fromField.value) > Number(toField.value)) {
+      fromField.setAttribute('aria-invalid', 'true');
+      toField.setAttribute('aria-invalid', 'true');
+      fromField.focus();
+      throw new Error(`В диапазоне «${fromField.dataset.optionLabel}» значение «От» не может быть больше «До»`);
     }
   });
   const action = selectedAction();
@@ -4156,6 +4958,15 @@ async function openRunDrawer(runId) {
   drawer.hidden = false;
   $('#drawer-close').focus({ preventScroll: true });
   await updateDrawer();
+}
+
+async function toggleRunDrawer(runId) {
+  const drawer = $('#run-drawer');
+  if (state.selectedRunId === runId && !drawer.hidden && !drawer.classList.contains('is-closing')) {
+    closeRunDrawer();
+    return;
+  }
+  await openRunDrawer(runId);
 }
 
 function closeRunDrawer({ restoreFocus = true, immediate = false } = {}) {
@@ -4457,6 +5268,11 @@ function bindInstallTriggers(root = document) {
 
 async function installFile(file) {
   if (!file || state.fileInstallBusy) return;
+  const packageName = String(file.name || '').toLowerCase();
+  if (!packageName.endsWith('.softhub.zip') && !packageName.endsWith('.softhub')) {
+    toast('Нужен готовый .softhub.zip из GitHub Releases → Assets. Source code ZIP сюда не подходит.', 'error', 7600);
+    return;
+  }
   const zone = $('#drop-zone');
   const button = $('.button', zone);
   state.fileInstallBusy = true;
@@ -4897,11 +5713,11 @@ function openQuickRun() {
 }
 
 function openLiveRun(origin) {
-  openActivityPanel('active', origin);
+  toggleActivityPanel('active', origin);
 }
 
 function openAttentionRun(origin) {
-  openActivityPanel('attention', origin);
+  toggleActivityPanel('attention', origin);
 }
 
 async function confirmVaultLock() {
@@ -4955,9 +5771,11 @@ function bindEvents() {
   $('#github-install-form').addEventListener('submit', installFromGitHub);
   $('#patch-feed-form').addEventListener('submit', (event) => { event.preventDefault(); void scanPatchFeed(); });
   $$('[data-quick-action]').forEach((button) => button.addEventListener('click', () => handleQuickAction(button.dataset.quickAction, button)));
-  $$('[data-activity-open]').forEach((button) => button.addEventListener('click', () => openActivityPanel(button.dataset.activityOpen, button)));
+  $$('[data-activity-open]').forEach((button) => button.addEventListener('click', () => toggleActivityPanel(button.dataset.activityOpen, button)));
   $('#vault-quick').addEventListener('click', () => state.data?.vault.unlocked ? showView('settings') : openVaultModal());
   $('#settings-vault-action').addEventListener('click', () => state.data?.vault.unlocked ? lockVault() : openVaultModal());
+  $('#core-update-primary').addEventListener('click', handleCoreUpdateAction);
+  $('#core-update-secondary').addEventListener('click', handleCoreUpdateAction);
   $('#vault-lock-button').addEventListener('click', lockVault);
   $('#import-accounts-button').addEventListener('click', openImportModal);
   $('#export-accounts-button').addEventListener('click', openExportModal);
@@ -5143,6 +5961,14 @@ function bindEvents() {
     }
   });
   document.addEventListener('click', (event) => {
+    const updateGuide = $('#core-update-guide');
+    const updateNotes = $('#core-update-notes');
+    if (
+      updateGuide.open
+      && !updateGuide.contains(event.target)
+      && !event.target.closest('[data-core-update-action="guide"]')
+    ) updateGuide.open = false;
+    if (updateNotes.open && !updateNotes.contains(event.target)) updateNotes.open = false;
     const activityPanel = $('#activity-panel');
     if (
       !activityPanel.hidden
@@ -5151,10 +5977,19 @@ function bindEvents() {
     ) {
       closeActivityPanel({ restoreFocus: false });
     }
+    const runDrawer = $('#run-drawer');
+    if (
+      !runDrawer.hidden
+      && !runDrawer.contains(event.target)
+      && !event.target.closest('[data-open-run]')
+      && !event.target.closest('[data-request-run-stop], [data-review-run], [data-reconcile-run]')
+    ) {
+      closeRunDrawer({ restoreFocus: false });
+    }
     const target = event.target.closest('button');
     if (!target) return;
     if (target.dataset.runModule) openRunModal(target.dataset.runModule);
-    if (target.dataset.openRun) openRunDrawer(target.dataset.openRun);
+    if (target.dataset.openRun) void toggleRunDrawer(target.dataset.openRun);
     if (target.dataset.requestRunStop) openRunStopFlow(target.dataset.requestRunStop);
     if (target.dataset.reviewRun) reviewRunAttention(target.dataset.reviewRun, target);
     if (target.dataset.reconcileRun) openRunReconciliationFlow(target.dataset.reconcileRun);
@@ -5243,6 +6078,8 @@ function bindEvents() {
   window.addEventListener('beforeunload', () => {
     stopPatchRadarMotion();
     revokePresentationAssets();
+    if (typeof state.coreUpdateUnsubscribe === 'function') state.coreUpdateUnsubscribe();
+    state.coreUpdateUnsubscribe = null;
   }, { once: true });
 }
 
@@ -5266,6 +6103,7 @@ async function start() {
   } else {
     setStartupVaultGate(false);
   }
+  void initializeCoreUpdater();
   if (state.data?.patch_feed?.owner) window.setTimeout(() => void scanPatchFeed({ silent: true }), 850);
   state.pollHandle = window.setInterval(async () => {
     if (document.visibilityState !== 'visible') return;

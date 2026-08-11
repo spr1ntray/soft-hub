@@ -236,7 +236,11 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("CSV без защиты — только для импорта", self.html)
         self.assertEqual(by_id["capsolver-key"].get("type"), "password")
         self.assertEqual(by_id["capsolver-key"].get("autocomplete"), "off")
-        self.assertEqual(by_id["plugin-file-input"].get("accept"), ".zip,.softhub,application/zip")
+        self.assertEqual(
+            by_id["plugin-file-input"].get("accept"),
+            ".softhub.zip,.softhub",
+        )
+        self.assertIn("Source code ZIP сюда не подходит", self.javascript)
         self.assertEqual(by_id["toast-region"].get("aria-live"), "polite")
 
         scripts = self.dom.find("script")
@@ -623,6 +627,7 @@ class StaticDOMTests(unittest.TestCase):
             'data-reconcile-run="${escapeHtml(row.run_id)}"',
             "function renderActivityPanel()",
             "function openActivityPanel(",
+            "function toggleActivityPanel(",
             "function closeActivityPanel(",
             "function openRunStopFlow(runId)",
             "function openRunReconciliationFlow(runId)",
@@ -674,6 +679,8 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("return raw ? 'Выполняет шаг' : 'Текущий этап';", self.javascript)
         self.assertIn("else if (!$('#activity-panel').hidden) closeActivityPanel()", self.javascript)
         self.assertIn("origin?.isConnected", self.javascript)
+        self.assertIn("fullyOpen && state.activityFilter === resolvedFilter", self.javascript)
+        self.assertIn("toggleActivityPanel(button.dataset.activityOpen, button)", self.javascript)
         self.assertNotIn("$('[data-quick-action=\"live\"]').disabled", self.javascript)
 
         activity_renderer = self.javascript[
@@ -822,6 +829,63 @@ class StaticDOMTests(unittest.TestCase):
         self.assertNotIn("dataset.busy", dismiss_source)
         self.assertNotIn("дождитесь результата", dismiss_source)
         self.assertIn("$('#drawer-close').addEventListener('click', dismissRunDrawer)", self.javascript)
+        self.assertIn("async function toggleRunDrawer(runId)", self.javascript)
+        self.assertIn("void toggleRunDrawer(target.dataset.openRun)", self.javascript)
+        self.assertIn("!runDrawer.contains(event.target)", self.javascript)
+        self.assertIn("closeRunDrawer({ restoreFocus: false })", self.javascript)
+        self.assertIn("pointer-events: none", re.search(r"\.dock-tooltip\s*\{(?P<body>.*?)\n\}", self.css, re.DOTALL).group("body"))
+
+    def test_activity_and_drawer_toggle_state_machines_execute(self) -> None:
+        resolve_source = self.javascript[
+            self.javascript.index("function resolveActivityFilter("):
+            self.javascript.index("function openActivityPanel(")
+        ]
+        toggle_activity_source = self.javascript[
+            self.javascript.index("function toggleActivityPanel("):
+            self.javascript.index("function closeActivityPanel(")
+        ]
+        toggle_drawer_source = self.javascript[
+            self.javascript.index("async function toggleRunDrawer("):
+            self.javascript.index("function closeRunDrawer(")
+        ]
+        script = "\n".join(
+            (
+                "const panel = {hidden:true,classList:{closing:false,contains(name){return name === 'is-closing' && this.closing;}}};",
+                "const drawer = {hidden:true,classList:{closing:false,contains(name){return name === 'is-closing' && this.closing;}}};",
+                "const state = {activityFilter:'active',activityAccountsLoaded:false,data:{stats:{attention_runs:0}},selectedRunId:null};",
+                "const document = {activeElement:null};",
+                "const $ = (selector) => selector === '#activity-panel' ? panel : drawer;",
+                "const activityRows = () => [];",
+                "let activityOpened = []; let activityClosed = 0; let drawerOpened = []; let drawerClosed = 0;",
+                "function openActivityPanel(filter){activityOpened.push(filter);state.activityFilter=filter;panel.hidden=false;panel.classList.closing=false;}",
+                "function closeActivityPanel(){activityClosed += 1;panel.hidden=true;}",
+                "async function openRunDrawer(runId){drawerOpened.push(runId);state.selectedRunId=runId;drawer.hidden=false;drawer.classList.closing=false;}",
+                "function closeRunDrawer(){drawerClosed += 1;state.selectedRunId=null;drawer.hidden=true;}",
+                resolve_source,
+                toggle_activity_source,
+                toggle_drawer_source,
+                "toggleActivityPanel('active');",
+                "if (activityOpened.join(',') !== 'active' || activityClosed) throw new Error('closed activity must open');",
+                "toggleActivityPanel('active');",
+                "if (activityClosed !== 1 || !panel.hidden) throw new Error('same activity key must close');",
+                "panel.hidden=false;state.activityFilter='active';toggleActivityPanel('attention');",
+                "if (activityOpened.at(-1) !== 'attention' || activityClosed !== 1) throw new Error('different activity key must switch');",
+                "panel.classList.closing=true;toggleActivityPanel('attention');",
+                "if (activityOpened.at(-1) !== 'attention' || panel.classList.closing) throw new Error('closing activity must reopen');",
+                "state.selectedRunId='run-a';drawer.hidden=false;await toggleRunDrawer('run-a');",
+                "if (drawerClosed !== 1 || !drawer.hidden) throw new Error('same drawer key must close');",
+                "await toggleRunDrawer('run-b');",
+                "if (drawerOpened.at(-1) !== 'run-b' || state.selectedRunId !== 'run-b') throw new Error('different drawer key must open');",
+            )
+        )
+        completed = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_ambient_background_motion_is_compositor_only_and_respects_reduced_motion(self) -> None:
         ambient_rule = re.search(r"\.ambient-scene\s*\{(?P<body>.*?)\n\}", self.css, re.DOTALL)
@@ -1189,35 +1253,118 @@ class StaticDOMTests(unittest.TestCase):
         status = self.dom.find("span", id="adspower-status")
         self.assertEqual(len(status), 1)
         self.assertIn("capability-status", str(status[0].get("class", "")).split())
-        status_rule = re.search(r"\.capability-status\s*\{([^}]*)\}", self.css, re.DOTALL)
+        self.assertEqual(status[0].get("role"), "status")
+        self.assertEqual(status[0].get("aria-live"), "polite")
+        self.assertEqual(status[0].get("data-state"), "loading")
+        status_rule = re.search(r"(?m)^\.capability-status\s*\{([^}]*)\}", self.css, re.DOTALL)
         self.assertIsNotNone(status_rule)
         self.assertIn("inline-size: max-content", status_rule.group(1))
-        self.assertIn("min-inline-size: 104px", status_rule.group(1))
-        self.assertIn("padding-inline: 10px", status_rule.group(1))
-        self.assertIn(
-            ".account-capability--browser .capability-copy { padding-right: 116px; }",
-            self.css,
-        )
+        self.assertIn("min-inline-size: 112px", status_rule.group(1))
+        self.assertIn("min-block-size: 28px", status_rule.group(1))
+        self.assertIn('.capability-status[data-state="ready"]', self.css)
+        self.assertIn('.capability-status[data-state="warning"]', self.css)
+        self.assertIn('"mark copy status"', self.css)
+        self.assertIn('". status"', self.css)
+        self.assertNotIn("min-width: min(390px, 38vw)", self.css)
+        self.assertNotIn("padding-right: 116px", self.css)
 
-    def test_settings_explain_safe_core_updates_without_claiming_auto_update(self) -> None:
+    def test_settings_offer_explicit_accessible_core_update_flow(self) -> None:
         by_id: dict[str, dict[str, str | None]] = {
             str(attrs["id"]): attrs
             for _, attrs in self.dom.elements
             if attrs.get("id")
         }
         for element_id in (
+            "core-update-card",
             "settings-app-version",
+            "core-update-live",
+            "core-update-state",
+            "core-update-progress",
+            "core-update-progress-bar",
+            "core-update-notes",
+            "core-update-notes-list",
+            "core-update-primary",
+            "core-update-secondary",
             "core-update-guide",
             "settings-update-platform",
+            "nav-core-update",
         ):
             self.assertIn(element_id, by_id)
-        self.assertIn("Новая версия ставится поверх текущей", self.html)
+        self.assertEqual(by_id["core-update-live"].get("role"), "status")
+        self.assertEqual(by_id["core-update-live"].get("aria-live"), "polite")
+        self.assertEqual(by_id["core-update-live"].get("aria-atomic"), "true")
+        self.assertEqual(by_id["core-update-card"].get("aria-busy"), "false")
+        self.assertEqual(by_id["core-update-progress-bar"].get("max"), "100")
+        self.assertEqual(by_id["core-update-primary"].get("aria-describedby"), "core-update-copy")
+        self.assertIn("Проверить обновления", self.html)
+        self.assertIn("Скачивание и установка начнутся только после вашего разрешения", self.html)
         self.assertIn("function renderCoreUpdateGuide()", self.javascript)
+        self.assertIn("function initializeCoreUpdater()", self.javascript)
+        self.assertIn("function announceCoreUpdateIfReady()", self.javascript)
+        self.assertIn(
+            "if (state.coreUpdate.phase !== 'installing') await refresh();",
+            self.javascript,
+        )
+        self.assertIn("Оно ждёт вас в Настройках", self.javascript)
+        self.assertIn('settingsNav.dataset.updateAvailable', self.javascript)
+        self.assertIn("window.softHubDesktop", self.javascript)
+        self.assertIn("onStateChanged", self.javascript)
+        self.assertIn("await requestDestructiveConfirmation", self.javascript)
+        self.assertIn("openActivityPanel('active'", self.javascript)
         self.assertIn("state.data.app.platform", self.javascript)
         self.assertIn("перетащите Soft Hub в Applications", self.javascript)
         self.assertIn("Запустите новый EXE поверх текущей установки", self.javascript)
-        self.assertNotIn("Проверить обновления", self.html)
         self.assertIn(".setting-card--update {", self.css)
+        self.assertIn(".core-update-progress progress {", self.css)
+        self.assertIn('@media (prefers-reduced-motion: reduce)', self.css)
+
+        initializer = self.javascript[
+            self.javascript.index("async function initializeCoreUpdater("):
+            self.javascript.index("function renderDock(")
+        ]
+        self.assertIn("await checkCoreUpdate()", initializer)
+        self.assertNotIn("updater.download", initializer)
+        self.assertNotIn("updater.install", initializer)
+
+        notes_renderer = self.javascript[
+            self.javascript.index("function renderCoreUpdateNotes("):
+            self.javascript.index("function configureCoreUpdateButton(")
+        ]
+        self.assertIn("item.textContent = note", notes_renderer)
+        self.assertNotIn("innerHTML", notes_renderer)
+
+    def test_core_update_state_normalization_preserves_optimistic_phases(self) -> None:
+        state_source = self.javascript[
+            self.javascript.index("function normalizeCoreUpdatePhase("):
+            self.javascript.index("function applyCoreUpdatePayload(")
+        ]
+        script = "\n".join(
+            (
+                state_source,
+                "for (const phase of ['checking','downloading','installing']) {",
+                "  if (normalizeCoreUpdatePayload({}, phase).phase !== phase) throw new Error('lost fallback '+phase);",
+                "}",
+                "const current = normalizeCoreUpdatePayload({status:'up_to_date',currentVersion:'v0.6.12'});",
+                "if (current.phase !== 'current' || current.currentVersion !== '0.6.12') throw new Error('bad current state');",
+                "const ready = normalizeCoreUpdatePayload({phase:'downloaded',availableVersion:'v0.6.13',releaseNotes:'## Новое\\n- Быстрый старт\\n<script>текст</script>'});",
+                "if (ready.phase !== 'ready' || ready.availableVersion !== '0.6.13') throw new Error('bad ready state');",
+                "if (ready.releaseNotes.length !== 3 || ready.releaseNotes.some((note) => /[<>]/.test(note))) throw new Error('notes are not plain text');",
+                "const progress = normalizeCoreUpdatePayload({status:'downloading',percent:42.4,transferred:10,total:20});",
+                "if (progress.phase !== 'downloading' || progress.percent !== 42.4 || progress.total !== 20) throw new Error('bad progress');",
+                "const failure = normalizeCoreUpdatePayload({status:'error',message:'network request failed'});",
+                "if (failure.phase !== 'error' || failure.errorKind !== 'offline') throw new Error('bad error state');",
+                "const retry = normalizeCoreUpdatePayload({status:'downloaded',installIssue:'  Vault  не ответил\\nповторите  '});",
+                "if (retry.installIssue !== 'Vault не ответил повторите') throw new Error('bad install issue');",
+            )
+        )
+        completed = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_adspower_is_discoverable_and_referrals_use_a_topology_only_editor(self) -> None:
         by_id: dict[str, dict[str, str | None]] = {

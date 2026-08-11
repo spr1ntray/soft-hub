@@ -20,6 +20,10 @@ class PackagedRuntimeContractTests(unittest.TestCase):
         self.assertEqual(package["version"], APP_VERSION)
         self.assertEqual(pyproject["project"]["version"], APP_VERSION)
         self.assertEqual(package["build"]["directories"]["output"], "INSTALLERS")
+        self.assertEqual(
+            package["build"]["artifactName"],
+            "Soft-Hub-${version}-${arch}.${ext}",
+        )
         self.assertTrue((PROJECT_ROOT / "INSTALLERS" / "README_FIRST_RU.md").is_file())
         self.assertEqual(package["build"]["appId"], "io.sprintray.softhub")
 

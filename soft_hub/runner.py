@@ -424,6 +424,30 @@ def validate_run_options(schema: Any, options: Any) -> dict[str, Any]:
                 if comparison(len(value), boundary):
                     raise RunError(f"Поле options.{key} {label}")
 
+    range_members: dict[str, list[tuple[str, str]]] = {}
+    for key, field in properties.items():
+        ui = field.get("x-ui")
+        if not isinstance(ui, dict) or ui.get("control") != "dual_range":
+            continue
+        descriptor = ui.get("range")
+        if (
+            not isinstance(descriptor, dict)
+            or not isinstance(descriptor.get("id"), str)
+            or descriptor.get("role") not in {"from", "to"}
+        ):
+            raise RunError("Схема options плагина содержит некорректный dual_range")
+        range_members.setdefault(descriptor["id"], []).append((descriptor["role"], key))
+    for range_id, members in range_members.items():
+        if len(members) != 2 or {role for role, _ in members} != {"from", "to"}:
+            raise RunError(f"Схема options плагина содержит неполный dual_range {range_id}")
+        from_key = next(key for role, key in members if role == "from")
+        to_key = next(key for role, key in members if role == "to")
+        supplied = {key for key in (from_key, to_key) if key in options}
+        if supplied and supplied != {from_key, to_key}:
+            raise RunError(f"Диапазон options.{range_id} требует значения from и to")
+        if supplied and Decimal(str(options[from_key])) > Decimal(str(options[to_key])):
+            raise RunError(f"Диапазон options.{range_id}: from больше to")
+
     return dict(options)
 
 

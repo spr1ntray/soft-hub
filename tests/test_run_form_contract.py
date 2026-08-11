@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,16 +40,28 @@ class RunFormSourceContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(helper)
         helper_body = helper.group("body")
-        self.assertRegex(
-            helper_body,
-            r"type\s*===\s*['\"]integer['\"].*return\s+['\"]1['\"]",
-        )
         self.assertIn("field.multipleOf", helper_body)
         self.assertIn("Number.isFinite(multiple)", helper_body)
         self.assertRegex(helper_body, r"multiple\s*>\s*0")
-        self.assertRegex(helper_body, r"return.*['\"]any['\"]")
+        self.assertIn("return type === 'integer' ? '1' : 'any'", helper_body)
+        self.assertLess(
+            helper_body.index("return String(multiple)"),
+            helper_body.index("type === 'integer'"),
+            "An integer multipleOf must win over the fallback step of one",
+        )
         self.assertIn("optionNumberStep(type, field)", self.javascript)
         self.assertRegex(self.javascript, r"step=.{0,100}optionNumberStep\(type, field\)")
+        for contract in (
+            "function optionSliderConfig(type, field)",
+            "function optionSingleSliderMarkup(",
+            "function optionRangeFieldMarkup(",
+            "function bindOptionSliders(root)",
+            'type="range" data-option-slider',
+            'data-option-range-slider="minimum"',
+            'data-option-range-slider="maximum"',
+            "field.dataset.optionMultiple",
+        ):
+            self.assertIn(contract, self.javascript)
         option_entries = self.javascript[
             self.javascript.index("function optionEntries(action)"):
             self.javascript.index("function optionValueLabel(value)")
@@ -61,6 +74,49 @@ class RunFormSourceContractTests(unittest.TestCase):
             1,
             "A testnet action must have exactly one visible Hub-owned confirmation",
         )
+
+    def test_dual_range_uses_two_canonical_values_and_rejects_reversed_bounds(self) -> None:
+        range_renderer = self.javascript[
+            self.javascript.index("function optionRangeFieldMarkup("):
+            self.javascript.index("function optionFieldMarkup(")
+        ]
+        self.assertIn("<fieldset", range_renderer)
+        self.assertIn('<legend class="sr-only">', range_renderer)
+        self.assertEqual(range_renderer.count("optionNumericInputMarkup("), 2)
+        self.assertNotIn('data-option-key=', range_renderer.split('type="range"')[1])
+        collector = self.javascript[
+            self.javascript.index("function collectOptions()"):
+            self.javascript.index("async function handleRunSubmit(")
+        ]
+        self.assertIn("[data-option-range-group]", collector)
+        self.assertIn("Number(fromField.value) > Number(toField.value)", collector)
+
+    def test_slider_math_respects_integer_multiple_and_control_size_limit(self) -> None:
+        helpers = self.javascript[
+            self.javascript.index("function optionNumberStep("):
+            self.javascript.index("function optionUi(")
+        ]
+        script = "\n".join(
+            (
+                helpers,
+                "if (optionNumberStep('integer', {multipleOf:2}) !== '2') throw new Error('integer multiple');",
+                "if (optionNumberStep('integer', {}) !== '1') throw new Error('integer fallback');",
+                "const integer = optionSliderConfig('integer', {minimum:2,maximum:20,multipleOf:2});",
+                "if (!integer || integer.step !== 2 || integer.minimum !== 2 || integer.maximum !== 20) throw new Error(JSON.stringify(integer));",
+                "const decimal = optionSliderConfig('number', {minimum:0,maximum:1,multipleOf:0.1});",
+                "if (!decimal || decimal.step !== 0.1) throw new Error(JSON.stringify(decimal));",
+                "if (optionSliderConfig('integer', {minimum:0,maximum:5000,multipleOf:1}) !== null) throw new Error('too many ticks');",
+                "if (optionSliderConfig('integer', {minimum:1,maximum:10,multipleOf:0.5}) !== null) throw new Error('fractional integer grid');",
+            )
+        )
+        completed = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_run_form_has_singleton_default_empty_state_and_client_account_guard(self) -> None:
         self.assertIn('id="run-form" class="run-workbench" novalidate', self.html)

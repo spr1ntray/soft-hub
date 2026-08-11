@@ -16,6 +16,7 @@ import uuid
 import venv
 import zipfile
 from contextlib import contextmanager
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
@@ -106,6 +107,7 @@ _OPTION_UI_KEYS = {
     "unit",
     "advanced",
     "enum_labels",
+    "range",
 }
 _OUTPUT_MODE = "account_table"
 _OUTPUT_TYPES = {"string", "integer", "number", "decimal_string", "boolean"}
@@ -220,10 +222,31 @@ def _validate_option_ui(
     if "unit" in raw and field_type not in {"integer", "number"}:
         raise PluginError(f"{scope}.x-ui.unit разрешён только числовому полю")
     if "control" in raw:
-        if raw["control"] not in {"input", "textarea"}:
+        if raw["control"] not in {"input", "textarea", "slider", "dual_range"}:
             raise PluginError(f"{scope}.x-ui.control неизвестен")
         if raw["control"] == "textarea" and (field_type != "string" or choices):
             raise PluginError(f"{scope}: textarea разрешён только для свободной строки")
+        if raw["control"] in {"slider", "dual_range"} and (
+            field_type not in {"integer", "number"} or choices is not None
+        ):
+            raise PluginError(f"{scope}: slider разрешён только числовому полю")
+    range_descriptor = raw.get("range")
+    if range_descriptor is not None:
+        if raw.get("control") != "dual_range" or not isinstance(range_descriptor, dict):
+            raise PluginError(f"{scope}.x-ui.range разрешён только для dual_range")
+        _reject_unknown(range_descriptor, {"id", "role"}, f"{scope}.x-ui.range")
+        range_id = range_descriptor.get("id")
+        if (
+            not isinstance(range_id, str)
+            or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", range_id)
+        ):
+            raise PluginError(f"{scope}.x-ui.range.id должен быть snake_case")
+        if range_descriptor.get("role") not in {"from", "to"}:
+            raise PluginError(f"{scope}.x-ui.range.role должен быть from или to")
+        if set(range_descriptor) != {"id", "role"}:
+            raise PluginError(f"{scope}.x-ui.range требует id и role")
+    elif raw.get("control") == "dual_range":
+        raise PluginError(f"{scope}.x-ui.dual_range требует range")
     if "enum_labels" in raw:
         labels = raw["enum_labels"]
         if not isinstance(labels, dict) or choices is None:
@@ -238,6 +261,44 @@ def _validate_option_ui(
             )
     elif strict and choices is not None:
         raise PluginError(f"{scope}.x-ui.enum_labels обязателен для enum")
+
+
+def _validate_slider_field(field: dict[str, Any], *, scope: str) -> None:
+    field_type = field.get("type")
+    if field_type not in {"integer", "number"}:
+        raise PluginError(f"{scope}: slider разрешён только числовому полю")
+    if "default" not in field:
+        raise PluginError(f"{scope}: slider требует безопасный default")
+    if not {"minimum", "maximum"}.issubset(field) or field["minimum"] >= field["maximum"]:
+        raise PluginError(f"{scope}: slider требует minimum меньше maximum")
+    if field_type == "number" and "multipleOf" not in field:
+        raise PluginError(f"{scope}: number slider требует multipleOf")
+    step = field.get("multipleOf", 1)
+    if field_type == "integer" and (
+        not isinstance(step, int) or isinstance(step, bool) or step < 1
+    ):
+        raise PluginError(f"{scope}: integer slider требует целый multipleOf")
+    try:
+        minimum = Decimal(str(field["minimum"]))
+        maximum = Decimal(str(field["maximum"]))
+        default = Decimal(str(field["default"]))
+        decimal_step = Decimal(str(step))
+        ticks = (maximum - minimum) / decimal_step
+    except (InvalidOperation, ZeroDivisionError):
+        raise PluginError(f"{scope}: slider имеет некорректную числовую сетку") from None
+    if ticks != ticks.to_integral_value() or not 1 <= ticks <= 1000:
+        raise PluginError(f"{scope}: slider допускает от 1 до 1000 шагов")
+    for label, value in (("minimum", minimum), ("maximum", maximum), ("default", default)):
+        quotient = value / decimal_step
+        if quotient != quotient.to_integral_value():
+            raise PluginError(f"{scope}.{label} не кратен multipleOf")
+    if field_type == "integer" and any(
+        not isinstance(field[name], int)
+        or isinstance(field[name], bool)
+        or not -(2**53 - 1) <= field[name] <= 2**53 - 1
+        for name in ("minimum", "maximum", "default")
+    ):
+        raise PluginError(f"{scope}: integer slider требует безопасные integer-значения")
 
 
 def _validate_options_schema(raw: Any, *, strict: bool, scope: str) -> None:
@@ -276,6 +337,7 @@ def _validate_options_schema(raw: Any, *, strict: bool, scope: str) -> None:
     primary_count = 0
     ui_orders: set[int] = set()
     group_modes: dict[str, bool] = {}
+    range_fields: dict[str, list[tuple[str, dict[str, Any], dict[str, Any]]]] = {}
     for key, field in properties.items():
         field_scope = f"{scope}.properties.{key}"
         _reject_unknown(field, _OPTION_FIELD_KEYS, field_scope)
@@ -383,6 +445,10 @@ def _validate_options_schema(raw: Any, *, strict: bool, scope: str) -> None:
             )
             if strict:
                 ui = field["x-ui"]
+                if ui.get("control") in {"slider", "dual_range"}:
+                    _validate_slider_field(field, scope=field_scope)
+                if ui.get("control") == "dual_range":
+                    range_fields.setdefault(ui["range"]["id"], []).append((key, field, ui))
                 order = ui["order"]
                 if order in ui_orders:
                     raise PluginError(f"{field_scope}.x-ui.order должен быть уникальным")
@@ -396,6 +462,28 @@ def _validate_options_schema(raw: Any, *, strict: bool, scope: str) -> None:
                 group_modes[group] = advanced
                 if not advanced:
                     primary_count += 1
+
+    for range_id, members in range_fields.items():
+        if len(members) != 2 or {member[2]["range"]["role"] for member in members} != {"from", "to"}:
+            raise PluginError(f"{scope}.x-ui.range {range_id} требует ровно одну пару from/to")
+        from_key, from_field, from_ui = next(
+            member for member in members if member[2]["range"]["role"] == "from"
+        )
+        to_key, to_field, to_ui = next(
+            member for member in members if member[2]["range"]["role"] == "to"
+        )
+        for attribute in ("type", "title", "description", "minimum", "maximum", "multipleOf"):
+            if from_field.get(attribute) != to_field.get(attribute):
+                raise PluginError(f"{scope}.x-ui.range {range_id}: {attribute} должен совпадать")
+        for attribute in ("group", "advanced", "unit"):
+            if from_ui.get(attribute) != to_ui.get(attribute):
+                raise PluginError(f"{scope}.x-ui.range {range_id}: x-ui.{attribute} должен совпадать")
+        if (from_key in required) != (to_key in required):
+            raise PluginError(f"{scope}.x-ui.range {range_id}: оба поля должны быть одинаково required")
+        if Decimal(str(from_field["default"])) > Decimal(str(to_field["default"])):
+            raise PluginError(f"{scope}.x-ui.range {range_id}: default from больше default to")
+        if not bool(from_ui.get("advanced", False)):
+            primary_count -= 1
 
     if strict and primary_count > 7:
         raise PluginError(f"{scope} допускает не более 7 основных параметров")
@@ -1252,6 +1340,41 @@ def _validate_archive_member(info: zipfile.ZipInfo) -> PurePosixPath:
     return path
 
 
+def _missing_package_contract_message(names: set[str]) -> str:
+    root_manifest = "hub.plugin.json" in names
+    root_checksums = "hub.checksums.json" in names
+    if root_manifest and not root_checksums:
+        return (
+            "Патч не собран: в корне нет hub.checksums.json. "
+            "Возьмите готовый .softhub.zip в GitHub Releases → Assets."
+        )
+
+    manifest_paths = [
+        PurePosixPath(name)
+        for name in names
+        if PurePosixPath(name).name == "hub.plugin.json"
+    ]
+    for manifest_path in manifest_paths:
+        parent = manifest_path.parent
+        if parent == PurePosixPath("."):
+            continue
+        sibling = (parent / "hub.checksums.json").as_posix()
+        if sibling in names:
+            return (
+                "Патч запакован с лишней общей папкой. Нужен .softhub.zip, "
+                "где hub.plugin.json и hub.checksums.json лежат сразу в корне."
+            )
+    if manifest_paths:
+        return (
+            "Похоже, выбран GitHub Source code ZIP, а не готовый патч. "
+            "В Releases откройте Assets и выберите файл .softhub.zip."
+        )
+    return (
+        "Это не готовый пакет Soft Hub. Выберите в GitHub Releases → Assets "
+        "файл с окончанием .softhub.zip, а не Source code (zip)."
+    )
+
+
 class PluginManager:
     def __init__(self, database: Database, paths: HubPaths):
         self.database = database
@@ -1310,7 +1433,7 @@ class PluginManager:
                     names.add(normalized)
                 required = {"hub.plugin.json", "hub.checksums.json"}
                 if not required.issubset(names):
-                    raise PluginError("В корне архива нужны hub.plugin.json и hub.checksums.json")
+                    raise PluginError(_missing_package_contract_message(names))
                 sizes = {info.filename.rstrip("/"): info.file_size for info in infos if not info.is_dir()}
                 if sizes["hub.plugin.json"] > MAX_JSON_BYTES or sizes["hub.checksums.json"] > MAX_JSON_BYTES:
                     raise PluginError("Манифест или checksums превышает лимит 2 MB")
