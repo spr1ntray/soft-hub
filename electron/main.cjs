@@ -17,6 +17,26 @@ const updaterRuntime = singleInstance ? require('./updater.cjs') : null;
 app.setName('Soft Hub');
 app.enableSandbox();
 
+const TRUSTED_CORE_PROXY_KEYS = Object.freeze(['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY']);
+
+function trustedCoreProxyEnvironment(environment = process.env, platform = process.platform) {
+  const proxyEnvironment = {};
+  const names = Object.keys(environment);
+  for (const canonicalName of TRUSTED_CORE_PROXY_KEYS) {
+    let sourceName = Object.prototype.hasOwnProperty.call(environment, canonicalName)
+      ? canonicalName
+      : null;
+    if (!sourceName && platform === 'win32') {
+      sourceName = names.find((name) => name.toUpperCase() === canonicalName) || null;
+    }
+    const value = sourceName ? environment[sourceName] : undefined;
+    if (typeof value === 'string' && value.trim()) {
+      proxyEnvironment[canonicalName] = value;
+    }
+  }
+  return proxyEnvironment;
+}
+
 function resolveCoreRoot() {
   return app.isPackaged ? process.resourcesPath : join(__dirname, '..');
 }
@@ -292,6 +312,7 @@ async function startHub() {
       TMP: process.env.TMP || '',
       TMPDIR: process.env.TMPDIR || '',
       LANG: process.env.LANG || 'en_US.UTF-8',
+      ...trustedCoreProxyEnvironment(),
       PYTHONNOUSERSITE: '1',
       PYTHONDONTWRITEBYTECODE: '1',
       PYTHONUTF8: '1',

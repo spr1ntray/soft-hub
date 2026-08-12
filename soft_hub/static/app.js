@@ -5266,11 +5266,15 @@ function bindInstallTriggers(root = document) {
   });
 }
 
+function isLocalPluginArchiveName(value) {
+  const filename = String(value || '').toLowerCase();
+  return filename.endsWith('.zip') || filename.endsWith('.softhub');
+}
+
 async function installFile(file) {
   if (!file || state.fileInstallBusy) return;
-  const packageName = String(file.name || '').toLowerCase();
-  if (!packageName.endsWith('.softhub.zip') && !packageName.endsWith('.softhub')) {
-    toast('Нужен готовый .softhub.zip из GitHub Releases → Assets. Source code ZIP сюда не подходит.', 'error', 7600);
+  if (!isLocalPluginArchiveName(file.name)) {
+    toast('Выберите ZIP-пакет Soft Hub или файл .softhub.', 'error', 6200);
     return;
   }
   const zone = $('#drop-zone');

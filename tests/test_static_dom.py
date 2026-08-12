@@ -238,9 +238,9 @@ class StaticDOMTests(unittest.TestCase):
         self.assertEqual(by_id["capsolver-key"].get("autocomplete"), "off")
         self.assertEqual(
             by_id["plugin-file-input"].get("accept"),
-            ".softhub.zip,.softhub",
+            ".softhub.zip,.softhub,.zip",
         )
-        self.assertIn("Source code ZIP сюда не подходит", self.javascript)
+        self.assertIn("Выберите ZIP-пакет Soft Hub", self.javascript)
         self.assertEqual(by_id["toast-region"].get("aria-live"), "polite")
 
         scripts = self.dom.find("script")
@@ -316,6 +316,29 @@ class StaticDOMTests(unittest.TestCase):
         for hook in ("specular-button", "border-glow", "animated-list", "blur-text"):
             self.assertIn(hook, self.html)
             self.assertIn(f".{hook}", self.css)
+
+    def test_local_patch_picker_accepts_zip_names_and_leaves_content_validation_to_core(self) -> None:
+        helper_source = self.javascript[
+            self.javascript.index("function isLocalPluginArchiveName("):
+            self.javascript.index("async function installFile(")
+        ]
+        script = "\n".join(
+            (
+                helper_source,
+                "const accepted = ['patch.softhub.zip', 'PATCH.SOFTHUB.ZIP', 'patch.softhub (1).zip', 'download.zip', 'patch.softhub'];",
+                "const rejected = ['patch', 'patch.tar.gz', 'patch.softhub.zip.exe'];",
+                "if (accepted.some((name) => !isLocalPluginArchiveName(name))) throw new Error('zip package rejected');",
+                "if (rejected.some((name) => isLocalPluginArchiveName(name))) throw new Error('unsupported file accepted');",
+            )
+        )
+        completed = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_patch_radar_rotates_only_the_sweep_and_fades_random_static_blips(self) -> None:
         orbit_rule = re.search(

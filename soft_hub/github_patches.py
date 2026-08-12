@@ -9,6 +9,7 @@ from typing import Any, BinaryIO
 from urllib.parse import quote, unquote, urlsplit
 
 from .config import APP_VERSION, MAX_ARCHIVE_BYTES
+from .tls import github_connection_error, public_https_context
 from .versions import compare_semantic_versions, parse_semantic_version
 
 
@@ -129,7 +130,10 @@ class GitHubPatchFeed:
     def __init__(self, opener: Any | None = None, *, timeout: int = REQUEST_TIMEOUT_SECONDS):
         if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 60:
             raise ValueError("GitHub Patch Feed timeout должен быть integer 1..60")
-        self.opener = opener or urllib.request.build_opener(_SafeGitHubApiRedirects())
+        self.opener = opener or urllib.request.build_opener(
+            _SafeGitHubApiRedirects(),
+            urllib.request.HTTPSHandler(context=public_https_context()),
+        )
         self.timeout = timeout
 
     def scan(self, value: str) -> list[dict[str, Any]]:
@@ -291,6 +295,10 @@ class GitHubPatchFeed:
                 raise GitHubPatchFeedError(
                     "GitHub owner не найден или не является публичным"
                 ) from error
+            if error.code == 407:
+                raise GitHubPatchFeedError(
+                    "Прокси-сервер просит авторизацию. Проверьте настройки сети"
+                ) from error
             if error.code in {403, 429}:
                 raise GitHubPatchFeedError(
                     "GitHub API временно ограничил запросы; попробуйте позже"
@@ -299,9 +307,7 @@ class GitHubPatchFeed:
         except GitHubPatchFeedError:
             raise
         except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
-            raise GitHubPatchFeedError(
-                "Не удалось подключиться к GitHub"
-            ) from error
+            raise GitHubPatchFeedError(github_connection_error(error)) from error
 
         if len(raw) > MAX_RESPONSE_BYTES:
             raise GitHubPatchFeedError("Ответ GitHub API слишком большой")

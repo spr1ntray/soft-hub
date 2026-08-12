@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import io
 import json
+import socket
+import ssl
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from soft_hub.config import MAX_ARCHIVE_BYTES
 from soft_hub.github_install import GitHubInstallError, GitHubPackageFetcher
@@ -28,7 +33,7 @@ class StubResponse(io.BytesIO):
 
 
 class QueueOpener:
-    def __init__(self, *responses: StubResponse):
+    def __init__(self, *responses: StubResponse | BaseException):
         self.responses = list(responses)
         self.requests: list[Any] = []
 
@@ -36,10 +41,29 @@ class QueueOpener:
         self.requests.append((request, timeout))
         if not self.responses:
             raise AssertionError("No response queued")
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 class GitHubPackageFetcherTests(unittest.TestCase):
+    def test_default_opener_uses_the_hardened_public_tls_context(self) -> None:
+        context = ssl.create_default_context()
+        with mock.patch(
+            "soft_hub.github_install.public_https_context", return_value=context
+        ) as context_factory:
+            fetcher = GitHubPackageFetcher()
+
+        context_factory.assert_called_once_with()
+        self.assertTrue(
+            any(
+                isinstance(handler, urllib.request.HTTPSHandler)
+                and getattr(handler, "_context", None) is context
+                for handler in fetcher.opener.handlers
+            )
+        )
+
     def test_direct_release_asset_is_resolved_without_api(self) -> None:
         opener = QueueOpener()
         package = GitHubPackageFetcher(opener).resolve(
@@ -78,6 +102,22 @@ class GitHubPackageFetcherTests(unittest.TestCase):
         self.assertEqual(package.filename, "r-2.0.0.softhub.zip")
         self.assertEqual(package.release, "v2.0.0")
         self.assertEqual(opener.requests[0][1], 30)
+
+    def test_transport_errors_explain_dns_and_timeout_without_leaking_details(self) -> None:
+        dns = GitHubPackageFetcher(
+            QueueOpener(urllib.error.URLError(socket.gaierror(-2, "private fixture")))
+        )
+        with self.assertRaisesRegex(GitHubInstallError, "DNS") as raised:
+            dns.resolve("https://github.com/o/r")
+        self.assertNotIn("private fixture", str(raised.exception))
+
+        direct = "https://github.com/o/r/releases/download/v1/r.softhub.zip"
+        timeout = GitHubPackageFetcher(
+            QueueOpener(urllib.error.URLError(socket.timeout()))
+        )
+        with tempfile.TemporaryDirectory(prefix="soft-hub-timeout-test-") as temporary:
+            with self.assertRaisesRegex(GitHubInstallError, "не ответил вовремя"):
+                timeout.download(direct, Path(temporary) / "r.softhub.zip")
 
     def test_ambiguous_release_requires_direct_asset_url(self) -> None:
         payload = json.dumps(

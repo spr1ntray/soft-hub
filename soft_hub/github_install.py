@@ -11,6 +11,7 @@ from typing import Any, BinaryIO
 from urllib.parse import quote, unquote, urlsplit
 
 from .config import APP_VERSION, MAX_ARCHIVE_BYTES
+from .tls import github_connection_error, public_https_context
 
 
 _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$")
@@ -79,7 +80,10 @@ class GitHubPackageFetcher:
     """Resolve and download a public GitHub release package without generic URL fetching."""
 
     def __init__(self, opener: Any | None = None):
-        self.opener = opener or urllib.request.build_opener(_SafeGitHubRedirects())
+        self.opener = opener or urllib.request.build_opener(
+            _SafeGitHubRedirects(),
+            urllib.request.HTTPSHandler(context=public_https_context()),
+        )
 
     @staticmethod
     def _segments(value: str) -> tuple[list[str], str]:
@@ -192,11 +196,13 @@ class GitHubPackageFetcher:
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 raise GitHubInstallError("GitHub repository или release не найден") from error
+            if error.code == 407:
+                raise GitHubInstallError("Прокси-сервер просит авторизацию. Проверьте настройки сети") from error
             if error.code == 403:
                 raise GitHubInstallError("GitHub API временно ограничил запросы; попробуйте позже") from error
             raise GitHubInstallError(f"GitHub API ответил HTTP {error.code}") from error
         except (OSError, urllib.error.URLError) as error:
-            raise GitHubInstallError("Не удалось подключиться к GitHub") from error
+            raise GitHubInstallError(github_connection_error(error)) from error
         if len(raw) > 2 * 1024 * 1024:
             raise GitHubInstallError("Ответ GitHub API слишком большой")
         try:
@@ -254,11 +260,13 @@ class GitHubPackageFetcher:
         except urllib.error.HTTPError as error:
             if created_destination:
                 destination.unlink(missing_ok=True)
+            if error.code == 407:
+                raise GitHubInstallError("Прокси-сервер просит авторизацию. Проверьте настройки сети") from error
             raise GitHubInstallError(f"Не удалось скачать release asset: HTTP {error.code}") from error
         except (OSError, urllib.error.URLError) as error:
             if created_destination:
                 destination.unlink(missing_ok=True)
-            raise GitHubInstallError("Не удалось скачать release asset с GitHub") from error
+            raise GitHubInstallError(github_connection_error(error)) from error
         if total == 0:
             if created_destination:
                 destination.unlink(missing_ok=True)

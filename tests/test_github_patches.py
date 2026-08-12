@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import io
 import json
+import ssl
 import unittest
 import urllib.error
+import urllib.request
 from typing import Any
+from unittest import mock
 from urllib.parse import urlsplit
 
 from soft_hub.config import MAX_ARCHIVE_BYTES
@@ -64,6 +67,22 @@ def http_error(url: str, code: int) -> urllib.error.HTTPError:
 
 
 class GitHubPatchFeedTests(unittest.TestCase):
+    def test_default_opener_uses_the_hardened_public_tls_context(self) -> None:
+        context = ssl.create_default_context()
+        with mock.patch(
+            "soft_hub.github_patches.public_https_context", return_value=context
+        ) as context_factory:
+            feed = GitHubPatchFeed()
+
+        context_factory.assert_called_once_with()
+        self.assertTrue(
+            any(
+                isinstance(handler, urllib.request.HTTPSHandler)
+                and getattr(handler, "_context", None) is context
+                for handler in feed.opener.handlers
+            )
+        )
+
     @staticmethod
     def ready_patch(version: str, *, owner: str = "owner", repository: str = "app.patch") -> dict[str, Any]:
         return {
@@ -476,7 +495,7 @@ class GitHubPatchFeedTests(unittest.TestCase):
             ).scan("o")
         with self.assertRaisesRegex(
             GitHubPatchFeedError,
-            "Не удалось подключиться",
+            "недоступен из этой сети",
         ):
             GitHubPatchFeed(QueueOpener(urllib.error.URLError("offline"))).scan("o")
         with self.assertRaisesRegex(GitHubPatchFeedError, "некорректный JSON"):

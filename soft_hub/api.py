@@ -15,7 +15,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from xml.sax.saxutils import escape as xml_escape
 
 from .config import APP_VERSION, MAX_ARCHIVE_BYTES, MAX_JSON_BYTES, HubPaths
@@ -77,6 +77,26 @@ def _valid_presentation_signature(payload: bytes, suffix: str) -> bool:
         ".ico": payload.startswith(b"\x00\x00\x01\x00"),
     }
     return checks.get(suffix, False)
+
+
+def _local_plugin_filename(encoded: str) -> str:
+    try:
+        filename = unquote(encoded, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise ApiError("Некорректное имя файла патча") from error
+    if (
+        not filename
+        or len(filename) > 255
+        or "/" in filename
+        or "\\" in filename
+        or any(ord(character) < 32 or ord(character) == 127 for character in filename)
+    ):
+        raise ApiError("Некорректное имя файла патча")
+    if filename.lower().endswith((".zip", ".softhub")):
+        return filename
+    raise ApiError(
+        "Выберите ZIP-пакет Soft Hub или файл .softhub"
+    )
 
 
 def _excel_inline_text(value: Any) -> str:
@@ -769,12 +789,9 @@ class HubRequestHandler(BaseHTTPRequestHandler):
         if content_type not in {"application/zip", "application/octet-stream"}:
             raise ApiError("Ожидается ZIP archive", 415)
         length = self._content_length(MAX_ARCHIVE_BYTES)
-        filename = self.headers.get("X-Soft-Hub-Filename", "plugin.softhub.zip")
-        if not filename.lower().endswith((".softhub.zip", ".softhub")):
-            raise ApiError(
-                "Нужен готовый .softhub.zip из GitHub Releases → Assets; "
-                "обычный Source code ZIP не подходит"
-            )
+        _local_plugin_filename(
+            self.headers.get("X-Soft-Hub-Filename", "plugin.softhub.zip")
+        )
         temporary = self.application.paths.imports / f"{uuid.uuid4()}.softhub.zip"
         remaining = length
         try:

@@ -461,6 +461,9 @@ def _validate_static_layout(runtime: Path, spec: RuntimeSpec) -> None:
     ]
     if mismatches:
         raise RuntimeError("Runtime не содержит точные зависимости: " + ", ".join(mismatches))
+    ca_bundle = purelib / "certifi" / "cacert.pem"
+    if not ca_bundle.is_file() or ca_bundle.stat().st_size < 100_000:
+        raise RuntimeError("Runtime не содержит рабочий CA bundle certifi")
     if spec.os_name == "win32":
         _validate_windows_layout(runtime, spec)
 

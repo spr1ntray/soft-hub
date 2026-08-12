@@ -43,10 +43,13 @@ fs.writeFileSync(path.join(runtime, 'soft-hub-runtime.json'), JSON.stringify({ o
 for (const name of ['python.exe', 'python312.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']) {
   fs.writeFileSync(path.join(runtime, name), 'fixture');
 }
+const caBundle = path.join(runtime, 'Lib', 'site-packages', 'certifi', 'cacert.pem');
+fs.mkdirSync(path.dirname(caBundle), { recursive: true });
+fs.writeFileSync(caBundle, Buffer.alloc(100001));
 
 verifyRuntime(root, 'win32', 1);
 assert.throws(() => verifyRuntime(root, 'darwin', 3), /Refusing to package darwin-arm64/);
-fs.unlinkSync(path.join(runtime, 'vcruntime140_1.dll'));
+fs.unlinkSync(caBundle);
 assert.throws(() => verifyRuntime(root, 'win32', 1), /runtime is incomplete/);
 fs.rmSync(root, { recursive: true, force: true });
 """

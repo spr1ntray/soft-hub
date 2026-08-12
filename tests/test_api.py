@@ -22,6 +22,7 @@ from tests.support import (
     TEST_PRIVATE_KEY_A,
     TEST_PRIVATE_KEY_B,
     plugin_manifest,
+    regular_zip_info,
     wait_until,
     write_plugin_archive,
 )
@@ -140,6 +141,71 @@ class ApiSecurityTestCase(unittest.TestCase):
                 self.assertEqual(status, 404)
                 self.assertEqual(json.loads(body), {"error": "Маршрут не найден"})
                 self.assert_security_headers(response_headers)
+
+    def test_local_install_accepts_browser_renamed_patch_but_still_inspects_contents(self) -> None:
+        archive = write_plugin_archive(
+            Path(self.temporary.name) / "renamed.softhub.zip",
+            plugin_manifest(plugin_id="api.browser-renamed"),
+        )
+        headers = {
+            "X-Soft-Hub-Token": TEST_API_TOKEN,
+            "Content-Type": "application/zip",
+            "X-Soft-Hub-Filename": "renamed.softhub%20(1).zip",
+        }
+        status, response_headers, body = self.request(
+            "POST",
+            "/api/modules/install",
+            body=archive.read_bytes(),
+            headers=headers,
+        )
+        self.assertEqual(status, 201, body.decode(errors="replace"))
+        self.assertEqual(json.loads(body)["id"], "api.browser-renamed")
+        self.assert_security_headers(response_headers)
+
+        source_buffer = io.BytesIO()
+        with zipfile.ZipFile(source_buffer, "w") as source:
+            source.writestr(
+                regular_zip_info("project-main/hub.plugin.json"),
+                json.dumps(plugin_manifest(plugin_id="api.source-zip")),
+            )
+            source.writestr(
+                regular_zip_info("project-main/plugin/main.py"),
+                "def run(context): pass\n",
+            )
+        status, response_headers, body = self.request(
+            "POST",
+            "/api/modules/install",
+            body=source_buffer.getvalue(),
+            headers={
+                **headers,
+                "X-Soft-Hub-Filename": "source-code.zip",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("Source code ZIP", json.loads(body)["error"])
+        self.assert_security_headers(response_headers)
+
+    def test_local_install_accepts_generic_zip_name_after_content_validation(self) -> None:
+        archive = write_plugin_archive(
+            Path(self.temporary.name) / "wrong-name.softhub.zip",
+            plugin_manifest(plugin_id="api.wrong-name"),
+        )
+        status, response_headers, body = self.request(
+            "POST",
+            "/api/modules/install",
+            body=archive.read_bytes(),
+            headers={
+                "X-Soft-Hub-Token": TEST_API_TOKEN,
+                "Content-Type": "application/zip",
+                "X-Soft-Hub-Filename": "source-code.zip",
+            },
+        )
+        self.assertEqual(status, 201, body.decode(errors="replace"))
+        self.assertEqual(json.loads(body)["id"], "api.wrong-name")
+        self.assertIsNotNone(
+            self.application.database.one("SELECT id FROM modules WHERE id=?", ("api.wrong-name",))
+        )
+        self.assert_security_headers(response_headers)
 
     def test_presentation_assets_are_authenticated_bounded_images_without_path_disclosure(self) -> None:
         manifest = plugin_manifest(plugin_id="api.presentation-test")

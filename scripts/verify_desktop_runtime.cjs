@@ -35,11 +35,26 @@ function verifyRuntime(projectRoot, electronPlatformName, archValue) {
   }
 
   const required = expectedOs === 'win32'
-    ? ['python.exe', 'python312.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']
-    : [path.join('bin', 'python3')];
+    ? [
+      'python.exe',
+      'python312.dll',
+      'vcruntime140.dll',
+      'vcruntime140_1.dll',
+      path.join('Lib', 'site-packages', 'certifi', 'cacert.pem'),
+    ]
+    : [
+      path.join('bin', 'python3'),
+      path.join('lib', 'python3.12', 'site-packages', 'certifi', 'cacert.pem'),
+    ];
   const missing = required.filter((relative) => !fs.existsSync(path.join(runtimeRoot, relative)));
   if (missing.length > 0) {
     throw new Error(`Managed ${expectedOs}-${expectedArch} runtime is incomplete: ${missing.join(', ')}`);
+  }
+  const caBundle = expectedOs === 'win32'
+    ? path.join(runtimeRoot, 'Lib', 'site-packages', 'certifi', 'cacert.pem')
+    : path.join(runtimeRoot, 'lib', 'python3.12', 'site-packages', 'certifi', 'cacert.pem');
+  if (fs.statSync(caBundle).size < 100_000) {
+    throw new Error(`Managed ${expectedOs}-${expectedArch} runtime has an invalid certifi CA bundle`);
   }
 }
 
