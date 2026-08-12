@@ -4,6 +4,15 @@ Soft Hub — приложение, в котором удобно держать
 
 Текущая версия — **Soft Hub 0.6.13**. Это локальный preview для одного владельца и доверенных софтов.
 
+## Скачать приложение
+
+- **[Скачать для Windows 10/11 x64](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.13/Soft-Hub-0.6.13-x64.exe)** — установщик `.exe`, около 121 МБ;
+- **[Скачать для Mac с Apple Silicon](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.13/Soft-Hub-0.6.13-arm64.dmg)** — установщик `.dmg`, около 157 МБ.
+
+После скачивания запустите файл двойным кликом. На Windows откроется обычный мастер установки; на Mac перетащите **Soft Hub** в **Applications**.
+
+В папке `INSTALLERS` на странице репозитория находится только инструкция — это нормально. Сами крупные установщики хранятся в [GitHub Releases → Assets](https://github.com/spr1ntray/soft-hub/releases/tag/v0.6.13), а ссылки выше скачивают их напрямую.
+
 ## Установка
 
 Готовые установщики публикуются в [GitHub Releases](https://github.com/spr1ntray/soft-hub/releases/latest). В локальной папке проекта те же файлы лежат наверху, в [`INSTALLERS`](INSTALLERS):

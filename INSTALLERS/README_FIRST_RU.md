@@ -1,6 +1,11 @@
 # Сначала откройте этот файл
 
-В локальной рабочей папке здесь лежат установщики текущей версии Soft Hub. Пользователю публичного репозитория удобнее скачать те же файлы из [GitHub Releases](https://github.com/spr1ntray/soft-hub/releases/latest).
+## Прямые ссылки
+
+- **[Скачать Soft Hub для Windows 10/11 x64](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.13/Soft-Hub-0.6.13-x64.exe)**
+- **[Скачать Soft Hub для Mac с Apple Silicon](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.13/Soft-Hub-0.6.13-arm64.dmg)**
+
+В локальной рабочей папке здесь лежат установщики текущей версии Soft Hub. В публичном репозитории эта папка содержит только инструкцию: сами крупные файлы находятся в [GitHub Releases → Assets](https://github.com/spr1ntray/soft-hub/releases/tag/v0.6.13).
 
 - `Soft-Hub-0.6.13-arm64.dmg` — для Mac с Apple Silicon (M1/M2/M3/M4 и новее).
 - `Soft-Hub-0.6.13-x64.exe` — для Windows 10/11 x64.
