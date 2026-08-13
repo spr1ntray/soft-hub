@@ -606,7 +606,7 @@ class StaticDOMTests(unittest.TestCase):
             for _, attrs in self.dom.elements
             if attrs.get("aria-controls") == "activity-panel"
         ]
-        self.assertGreaterEqual(len(panel_controls), 5)
+        self.assertGreaterEqual(len(panel_controls), 4)
         self.assertTrue(all(attrs.get("aria-expanded") == "false" for attrs in panel_controls))
         self.assertEqual(by_id["activity-panel-summary"].get("role"), "status")
         self.assertEqual(by_id["activity-panel-summary"].get("aria-live"), "polite")
@@ -647,13 +647,11 @@ class StaticDOMTests(unittest.TestCase):
             'data-activity-control="details:${escapeHtml(activityControlKey)}"',
             'data-request-run-stop="${escapeHtml(row.run_id)}"',
             'data-review-run="${escapeHtml(row.run_id)}"',
-            'data-reconcile-run="${escapeHtml(row.run_id)}"',
             "function renderActivityPanel()",
             "function openActivityPanel(",
             "function toggleActivityPanel(",
             "function closeActivityPanel(",
             "function openRunStopFlow(runId)",
-            "function openRunReconciliationFlow(runId)",
             "ACTIVE_RUN_STATUSES",
             "ATTENTION_RUN_STATUSES",
             "ACTIVE_ACCOUNT_STATUSES",
@@ -715,13 +713,15 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn('title="Открыть подробный журнал"', activity_renderer)
         self.assertIn("${iconMarkup('search')}</button>", activity_renderer)
         self.assertNotIn("${iconMarkup('history')}</button>", activity_renderer)
-        self.assertIn("«Скрыть» уберёт известную ошибку из уведомлений", self.html)
-        self.assertIn("Перед сверкой Hub откроет журнал", self.html)
+        self.assertIn("«Скрыть» уберёт ошибку из уведомлений", self.html)
+        self.assertIn("сохранит журнал и результаты в истории", self.html)
         self.assertIn("function reviewRunAttention(runId, button)", self.javascript)
         self.assertIn("function applyAttentionResolution(resolvedRun)", self.javascript)
         self.assertIn("state.activityAccountsGeneration += 1", self.javascript)
         self.assertIn("target.dataset.reviewRun", self.javascript)
-        self.assertIn("target.dataset.reconcileRun", self.javascript)
+        self.assertNotIn("target.dataset.reconcileRun", self.javascript)
+        self.assertNotIn("data-reconcile-run", self.javascript)
+        self.assertNotIn("/reconcile", self.javascript)
 
         self.assertIn(".activity-panel {", self.css)
         self.assertIn(".activity-table {", self.css)
@@ -730,7 +730,7 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("@keyframes activity-panel-in", self.css)
         self.assertIn("@keyframes activity-loading", self.css)
 
-    def test_mixed_account_attention_escalates_the_whole_run_to_reconciliation(self) -> None:
+    def test_mixed_account_attention_can_be_hidden_without_reconciliation(self) -> None:
         resolution_source = self.javascript[
             self.javascript.index("function activityProjectionMatches("):
             self.javascript.index("function accountFreeActivityRows(")
@@ -738,7 +738,7 @@ class StaticDOMTests(unittest.TestCase):
         script = "\n".join(
             (
                 "const ACTIVE_RUN_STATUSES = new Set(['queued','starting','running','cancelling']);",
-                "const ATTENTION_RUN_STATUSES = new Set(['failed','needs_attention']);",
+                "const ATTENTION_RUN_STATUSES = new Set(['failed']);",
                 "const ATTENTION_ACCOUNT_STATUSES = new Set(['partial','failed','blocked','needs_attention']);",
                 resolution_source,
                 "const mixed = [",
@@ -746,7 +746,7 @@ class StaticDOMTests(unittest.TestCase):
                 "  {run_status:'failed',status:'needs_attention',stage:'external_state_unknown'},",
                 "];",
                 "const mixedKinds = mixed.map((row) => activityResolutionKind(row, mixed));",
-                "if (mixedKinds.some((kind) => kind !== 'reconcile')) throw new Error(JSON.stringify(mixedKinds));",
+                "if (mixedKinds.some((kind) => kind !== 'review')) throw new Error(JSON.stringify(mixedKinds));",
                 "const known = [{run_status:'succeeded',status:'failed',stage:'action_failed'}];",
                 "if (activityResolutionKind(known[0], known) !== 'review') throw new Error('known failure must be reviewable');",
             )
@@ -1090,13 +1090,13 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("phrase: 'FORCE STOP'", self.javascript)
         self.assertIn("/force-stop`, { acknowledgement: 'FORCE STOP' }", self.javascript)
         self.assertIn("$('#drawer-force-stop').addEventListener('click', forceStopSelectedRun)", self.javascript)
-        self.assertIn("phrase: 'RECONCILED'", self.javascript)
-        self.assertIn("acknowledgement: 'RECONCILED'", self.javascript)
+        self.assertNotIn("phrase: 'RECONCILED'", self.javascript)
+        self.assertNotIn("acknowledgement: 'RECONCILED'", self.javascript)
         self.assertIn("function reviewSelectedRunFailure()", self.javascript)
         self.assertIn("/review`, {}", self.javascript)
         self.assertIn("$('#drawer-review').addEventListener('click', reviewSelectedRunFailure)", self.javascript)
         self.assertIn("Hub сразу завершит весь процесс", self.javascript)
-        self.assertIn("Hub снимет блокировки с аккаунтов", self.javascript)
+        self.assertIn("аккаунты сразу освободятся", self.javascript)
 
     def test_software_card_has_only_power_and_delete_secondary_controls(self) -> None:
         renderer = self.javascript[
@@ -1597,6 +1597,98 @@ class StaticDOMTests(unittest.TestCase):
             "$('#referral-chain-preview').addEventListener('dblclick', handleReferralDoubleClick)",
             self.javascript,
         )
+
+    def test_scroll_surfaces_use_themed_accessible_scrollbars(self) -> None:
+        light_match = re.search(r":root\s*\{(.*?)\n\}", self.css, re.DOTALL)
+        dark_match = re.search(r':root\[data-theme="dark"\]\s*\{(.*?)\n\}', self.css, re.DOTALL)
+        self.assertIsNotNone(light_match)
+        self.assertIsNotNone(dark_match)
+        for palette in (light_match.group(1), dark_match.group(1)):
+            for token in (
+                "scrollbar-track",
+                "scrollbar-thumb",
+                "scrollbar-thumb-hover",
+                "scrollbar-thumb-active",
+            ):
+                self.assertIn(f"--{token}:", palette)
+
+        firefox_rule = re.search(r":where\(\*\)\s*\{(?P<body>.*?)\n\}", self.css, re.DOTALL)
+        webkit_rule = re.search(
+            r":where\(\*\)::-webkit-scrollbar\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        thumb_rule = re.search(
+            r":where\(\*\)::-webkit-scrollbar-thumb\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        track_rule = re.search(
+            r":where\(\*\)::-webkit-scrollbar-track\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(firefox_rule)
+        self.assertIsNotNone(webkit_rule)
+        self.assertIsNotNone(thumb_rule)
+        self.assertIsNotNone(track_rule)
+        self.assertIn("scrollbar-width: thin", firefox_rule.group("body"))
+        self.assertIn(
+            "scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track)",
+            firefox_rule.group("body"),
+        )
+        for declaration in ("width: 12px", "height: 12px"):
+            self.assertIn(declaration, webkit_rule.group("body"))
+        for declaration in (
+            "min-width: 44px",
+            "min-height: 44px",
+            "border-radius: 999px",
+            "background-color: var(--scrollbar-thumb)",
+            "background-clip: padding-box",
+        ):
+            self.assertIn(declaration, thumb_rule.group("body"))
+        self.assertIn("background-color: var(--scrollbar-track)", track_rule.group("body"))
+        self.assertIn("::-webkit-scrollbar-thumb:hover", self.css)
+        self.assertIn("background-color: var(--scrollbar-thumb-hover)", self.css)
+        self.assertIn("::-webkit-scrollbar-thumb:active", self.css)
+        self.assertIn("background-color: var(--scrollbar-thumb-active)", self.css)
+        self.assertIn(":where(*)::-webkit-scrollbar-corner", self.css)
+
+        html_rule = re.search(r"html\s*\{(?P<body>.*?)\n\}", self.css, re.DOTALL)
+        gutter_rule = re.search(
+            r":where\(\s*\.modal,(?P<selectors>.*?)\)\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(html_rule)
+        self.assertIsNotNone(gutter_rule)
+        self.assertIn("scrollbar-gutter: stable", html_rule.group("body"))
+        self.assertIn("scrollbar-gutter: stable", gutter_rule.group("body"))
+        for selector in (
+            ".referral-inspector",
+            ".batch-run-list",
+            ".account-selector",
+            ".drawer",
+            ".drawer-account-table-wrap",
+            ".event-console",
+            ".activity-table-wrap",
+            ".result-report-table-scroll",
+        ):
+            self.assertIn(selector, gutter_rule.group("selectors"))
+
+        more_contrast = self.css[
+            self.css.index("@media (prefers-contrast: more)"):
+            self.css.index("@media (forced-colors: active)")
+        ]
+        forced_colors = self.css[
+            self.css.index("@media (forced-colors: active)"):
+            self.css.index("@media (prefers-reduced-motion: reduce)")
+        ]
+        reduced_motion = self.css[self.css.index("@media (prefers-reduced-motion: reduce)"):]
+        self.assertIn("--scrollbar-thumb: var(--ink)", more_contrast)
+        self.assertIn("scrollbar-color: ButtonText Canvas", forced_colors)
+        self.assertIn("background-color: ButtonText", forced_colors)
+        self.assertIn(":where(*)::-webkit-scrollbar-thumb { transition: none; }", reduced_motion)
 
     def test_semantic_palette_and_focus_ring_keep_readable_contrast(self) -> None:
         light_match = re.search(r":root\s*\{(.*?)\n\}", self.css, re.DOTALL)

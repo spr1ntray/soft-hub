@@ -1197,10 +1197,10 @@ class PluginArchiveTestCase(unittest.TestCase):
         self.assertEqual(reinstalled["health"], "ready")
         self.assertTrue((plugin_root / "1.0.0").is_dir())
 
-    def test_uninstall_refuses_active_and_unreconciled_runs(self) -> None:
+    def test_uninstall_refuses_only_active_runs(self) -> None:
         self.manager.install(self.archive("uninstall-blocked.zip"))
         now = utc_now()
-        for index, status in enumerate(("queued", "starting", "running", "cancelling", "needs_attention")):
+        for index, status in enumerate(("queued", "starting", "running", "cancelling")):
             run_id = f"blocked-{index}"
             self.database.execute(
                 "INSERT INTO runs(id,module_id,module_version,action_id,status,requested_at) "
@@ -1209,12 +1209,20 @@ class PluginArchiveTestCase(unittest.TestCase):
             )
             with self.subTest(status=status), self.assertRaisesRegex(
                 PluginError,
-                "активный запуск|внешнюю сверку",
+                "активный запуск",
             ):
                 self.manager.uninstall("test.plugin")
             self.assertIsNotNone(self.manager.get("test.plugin"))
             self.assertTrue((self.paths.plugins / "test.plugin" / "1.0.0").is_dir())
             self.database.execute("DELETE FROM runs WHERE id=?", (run_id,))
+
+        self.database.execute(
+            "INSERT INTO runs(id,module_id,module_version,action_id,status,requested_at) "
+            "VALUES ('legacy-attention','test.plugin','1.0.0','run','needs_attention',?)",
+            (now,),
+        )
+        removed = self.manager.uninstall("test.plugin")
+        self.assertTrue(removed["removed"])
 
     def test_uninstall_never_follows_corrupt_or_external_database_paths(self) -> None:
         self.manager.install(self.archive("uninstall-corrupt.zip"))

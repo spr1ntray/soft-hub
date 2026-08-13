@@ -167,11 +167,6 @@
               </article>
             </div>
 
-            <div id="attention-banner" class="attention-banner reveal reveal--4" hidden>
-              <span class="attention-mark">!</span>
-              <div><strong>Есть запуски, которые нужно проверить</strong><small>Некоторые из них закончились с неясным результатом. Откройте журнал и проверьте их перед повтором.</small></div>
-              <button class="button button--quiet" type="button" data-activity-open="attention" aria-controls="activity-panel" aria-expanded="false">Проверить</button>
-            </div>
           </section>
 
           <section id="view-software" class="view">
@@ -257,7 +252,7 @@
               <div class="result-report-controls">
                 <label class="result-report-field result-report-field--run"><span>СОФТ И ЗАПУСК</span><select id="result-report-select" aria-label="Выбрать отчёт парсинга"><option value="">Пока нет отчётов</option></select></label>
                 <label class="result-report-field"><span>ПОИСК</span><input id="result-report-search" type="search" placeholder="Аккаунт, адрес или значение" autocomplete="off" /></label>
-                <label class="result-report-field result-report-field--status"><span>СТАТУС</span><select id="result-report-status"><option value="all">Все кошельки</option><option value="succeeded">Успешно</option><option value="partial">Частично</option><option value="attention">Нужно проверить</option><option value="missing">Нет результата</option></select></label>
+                <label class="result-report-field result-report-field--status"><span>СТАТУС</span><select id="result-report-status"><option value="all">Все кошельки</option><option value="succeeded">Успешно</option><option value="partial">Частично</option><option value="attention">С ошибками</option><option value="missing">Нет результата</option></select></label>
                 <button id="result-report-export" class="button button--ink specular-button" type="button" disabled>Скачать CSV</button>
               </div>
               <div id="result-report-state" class="result-report-state" role="status" aria-live="polite">
@@ -365,7 +360,7 @@
                   <details id="core-update-guide" class="core-update-guide">
                     <summary><svg class="hub-icon" aria-hidden="true"><use href="#icon-download"></use></svg><span>Если обновление не запускается</span></summary>
                     <div class="core-update-steps">
-                      <span><b>1</b><span><strong>Закончите работу</strong><small>Дождитесь запусков и закройте всё, что требует сверки.</small></span></span>
+                      <span><b>1</b><span><strong>Закончите работу</strong><small>Дождитесь завершения активных запусков.</small></span></span>
                       <span><b>2</b><span><strong>Закройте Hub</strong><small>Заблокируйте Vault и полностью завершите приложение.</small></span></span>
                       <span><b>3</b><span><strong>Поставьте поверх</strong><small id="settings-update-platform">Откройте новый установщик и замените текущую версию.</small></span></span>
                     </div>
@@ -394,7 +389,7 @@
       <span class="dock-divider" aria-hidden="true"></span>
       <button class="dock-primary" type="button" data-quick-action="batch" aria-label="Запустить выбранные софты" aria-describedby="dock-tooltip-batch"><svg class="hub-icon" aria-hidden="true"><use href="#icon-batch"></use></svg><span id="dock-tooltip-batch" class="dock-tooltip" role="tooltip"><strong>Пакетный запуск</strong><span>Запустить выбранные софты одной пачкой</span></span><i id="dock-run-count"></i></button>
       <button type="button" data-quick-action="live" aria-label="Открыть текущие запуски" aria-describedby="dock-tooltip-live" aria-controls="activity-panel" aria-expanded="false"><svg class="hub-icon" aria-hidden="true"><use href="#icon-activity"></use></svg><span id="dock-tooltip-live" class="dock-tooltip" role="tooltip"><strong>Сейчас работают</strong><span>Посмотреть, что работает и как идёт запуск</span></span><i id="dock-live-count"></i></button>
-      <button type="button" data-quick-action="attention" aria-label="Открыть запуски, которые нужно проверить" aria-describedby="dock-tooltip-attention" aria-controls="activity-panel" aria-expanded="false"><svg class="hub-icon" aria-hidden="true"><use href="#icon-alert"></use></svg><span id="dock-tooltip-attention" class="dock-tooltip" role="tooltip"><strong>Нужно проверить</strong><span>Ошибки и запуски с неясным результатом</span></span><i id="dock-attention-count"></i></button>
+      <button type="button" data-quick-action="attention" aria-label="Открыть завершённые запуски с ошибками" aria-describedby="dock-tooltip-attention" aria-controls="activity-panel" aria-expanded="false"><svg class="hub-icon" aria-hidden="true"><use href="#icon-alert"></use></svg><span id="dock-tooltip-attention" class="dock-tooltip" role="tooltip"><strong>Ошибки</strong><span>Посмотреть журнал завершённых запусков</span></span><i id="dock-attention-count"></i></button>
     </nav>
 
     <aside id="activity-panel" class="activity-panel" aria-labelledby="activity-panel-title" aria-describedby="activity-panel-summary" tabindex="-1" hidden>
@@ -405,7 +400,7 @@
       <div class="activity-panel-toolbar">
         <div id="activity-panel-filters" class="activity-panel-filters" role="group" aria-label="Режим панели операций">
           <button class="is-active" type="button" data-activity-filter="active" aria-pressed="true"><span>Сейчас</span><i id="activity-filter-active-count">0</i></button>
-          <button type="button" data-activity-filter="attention" aria-pressed="false"><span>Проверить</span><i id="activity-filter-attention-count">0</i></button>
+          <button type="button" data-activity-filter="attention" aria-pressed="false"><span>Ошибки</span><i id="activity-filter-attention-count">0</i></button>
         </div>
         <p id="activity-panel-summary" role="status" aria-live="polite">Очередь свободна</p>
       </div>
@@ -421,7 +416,7 @@
         <div id="activity-panel-loading" class="activity-panel-state" data-state="loading" role="status" hidden><span class="activity-loading-mark" aria-hidden="true"><i></i><i></i><i></i></span><div><strong>Собираем статусы аккаунтов…</strong><small>Смотрим только служебные статусы — без секретов.</small></div></div>
         <div id="activity-panel-unavailable" class="activity-panel-state" data-state="unavailable" hidden><span aria-hidden="true"><svg class="hub-icon"><use href="#icon-alert"></use></svg></span><div><strong>Операции пока недоступны</strong><small id="activity-unavailable-copy">Обновите данные и откройте панель ещё раз.</small></div><button id="activity-panel-refresh" class="button button--quiet" type="button">Обновить</button></div>
       </div>
-      <footer class="activity-panel-foot"><span>«Скрыть» уберёт известную ошибку из уведомлений, но оставит её в истории. Перед сверкой Hub откроет журнал.</span><kbd>Esc</kbd></footer>
+      <footer class="activity-panel-foot"><span>«Скрыть» уберёт ошибку из уведомлений, но сохранит журнал и результаты в истории.</span><kbd>Esc</kbd></footer>
     </aside>
 
     <div id="modal-backdrop" class="modal-backdrop" hidden></div>
@@ -660,7 +655,6 @@
       <p id="drawer-resolution-note" class="drawer-stop-note" role="status" hidden></p>
       <div class="drawer-actions">
         <button id="drawer-review" class="button button--quiet" type="button" hidden><svg class="hub-icon" aria-hidden="true"><use href="#icon-check"></use></svg>Скрыть уведомление</button>
-        <button id="drawer-reconcile" class="button button--ink" type="button" hidden>Сверка выполнена</button>
         <button id="drawer-stop" class="button button--quiet" type="button"><svg class="hub-icon" aria-hidden="true"><use href="#icon-stop"></use></svg>Остановить мягко</button>
         <button id="drawer-force-stop" class="button button--danger" type="button"><svg class="hub-icon" aria-hidden="true"><use href="#icon-force"></use></svg>Остановить принудительно</button>
       </div>

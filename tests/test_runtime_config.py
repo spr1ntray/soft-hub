@@ -58,6 +58,29 @@ class ManagedRuntimeConfigTests(unittest.TestCase):
                     self.write_marker(state)
                     self.assertIsNone(config.managed_runtime())
 
+    def test_plugin_fingerprint_ignores_only_the_core_lock_digest(self) -> None:
+        base = "python-build-standalone:20260805:cpython-3.12.13:win32-x64"
+        previous = f"{base}:1111111111111111"
+        current = f"{base}:2222222222222222"
+        self.write_marker({"runtime_id": previous})
+
+        with mock.patch.object(config.sys, "executable", str(self.executable)):
+            self.assertEqual(config.runtime_fingerprint(), base)
+            self.assertTrue(config.runtime_fingerprints_compatible(previous, current))
+            self.assertTrue(config.runtime_fingerprints_compatible(previous, base))
+            self.assertFalse(
+                config.runtime_fingerprints_compatible(
+                    previous,
+                    "python-build-standalone:20260806:cpython-3.12.13:win32-x64",
+                )
+            )
+            self.assertFalse(
+                config.runtime_fingerprints_compatible(
+                    previous,
+                    "python-build-standalone:20260805:cpython-3.13.0:win32-x64",
+                )
+            )
+
     def test_bundled_pip_wheel_must_exist_inside_managed_runtime(self) -> None:
         wheel = self.runtime / "soft-hub-wheels" / "pip-26.2.1-py3-none-any.whl"
         wheel.parent.mkdir()

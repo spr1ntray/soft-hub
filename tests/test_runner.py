@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -10,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from soft_hub.config import HubPaths
+from soft_hub.config import HubPaths, runtime_fingerprint
 from soft_hub.database import Database, utc_now
 from soft_hub.plugins import PluginManager
 from soft_hub.runner import (
@@ -31,7 +33,7 @@ from tests.support import (
 )
 
 
-TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "needs_attention"}
+TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 TEST_JWT = "eyJabcdefghijklm.NOPQRSTUVWXYZ_123456.qwertyuiop12345"
 
 
@@ -174,6 +176,42 @@ class RunnerIntegrationTestCase(unittest.TestCase):
         )
         return self.plugins.install(archive)
 
+    def install_plugin_with_requirements(
+        self, source: str, manifest: dict[str, object], requirements: str
+    ) -> dict[str, object]:
+        archive = write_plugin_archive(
+            self.root / f"{manifest['id']}-{manifest['version']}.zip",
+            manifest,
+            files={
+                "plugin/main.py": source,
+                "requirements.txt": requirements,
+            },
+        )
+        return self.plugins.install(archive)
+
+    def mark_plugin_runtime_ready(self, installed: dict[str, object]) -> Path:
+        plugin_path = Path(str(installed["active_path"]))
+        candidate = self.plugins._venv_python(plugin_path)
+        candidate.parent.mkdir(parents=True)
+        candidate.write_text("test interpreter placeholder", encoding="utf-8")
+        environment = plugin_path / ".venv"
+        (environment / "pyvenv.cfg").write_text(
+            f"home = {Path(sys.executable).resolve().parent}\n",
+            encoding="utf-8",
+        )
+        (environment / ".soft-hub-ready.json").write_text(
+            json.dumps(
+                {
+                    "requirements_sha256": hashlib.sha256(
+                        (plugin_path / "requirements.txt").read_bytes()
+                    ).hexdigest(),
+                    "runtime_id": runtime_fingerprint(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        return candidate
+
     def wait_for_terminal(self, run_id: str) -> dict[str, object]:
         def current() -> dict[str, object] | None:
             run = self.runs.get(run_id)
@@ -206,7 +244,7 @@ class RunnerIntegrationTestCase(unittest.TestCase):
         manifest["actions"][0]["id"] = "run_cycle"  # type: ignore[index]
         return manifest
 
-    def test_completion_boundary_follows_lease_and_slot_finalization(self) -> None:
+    def test_completion_boundary_follows_worker_and_slot_finalization(self) -> None:
         manifest = plugin_manifest(plugin_id="runner.finalization-boundary")
         self.install_plugin('def run(context):\n    return {"ok": True}\n', manifest)
         release_entered = threading.Event()
@@ -230,7 +268,7 @@ class RunnerIntegrationTestCase(unittest.TestCase):
                 self.assertIn(
                     run_id,
                     self.runs._threads,
-                    "A terminal DB status must not publish worker completion before lease cleanup",
+                    "A terminal DB status must not publish worker completion before finalization",
                 )
             allow_release.set()
             wait_until(lambda: run_id not in self.runs._threads, timeout=3)
@@ -1186,7 +1224,7 @@ def run(context):
         self.assertEqual(review_event["data"]["original_status"], "succeeded")
         self.assertEqual(review_event["data"]["account_issue_count"], 1)
 
-    def test_reconciliation_closes_alert_preserves_failure_and_allows_restart(self) -> None:
+    def test_legacy_attention_can_be_hidden_and_restarted_without_confirmation(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
         self.vault.import_records(
             [
@@ -1238,20 +1276,11 @@ def run(context):
 
         self.assertEqual(
             self.runs.status_counts(),
-            {"active_runs": 0, "needs_attention": 1, "attention_runs": 1},
+            {"active_runs": 0, "needs_attention": 0, "attention_runs": 1},
         )
-        with self.assertRaisesRegex(RunError, "RECONCILED"):
-            self.runs.reconcile(run_id, "")
-        with self.assertRaisesRegex(RunError, "внешнюю сверку"):
-            self.runs.review_failure(run_id)
-        self.assertEqual(
-            len(self.database.all("SELECT * FROM account_leases WHERE run_id=?", (run_id,))),
-            1,
-        )
+        reviewed = self.runs.review_failure(run_id)
 
-        reconciled = self.runs.reconcile(run_id, "RECONCILED")
-
-        self.assertEqual(reconciled["status"], "reconciled")
+        self.assertEqual(reviewed["status"], "reviewed")
         preserved = self.runs.account_states(run_id)[0]
         self.assertEqual(preserved["status"], "failed")
         self.assertEqual(preserved["stage"], "action_failed")
@@ -1266,12 +1295,12 @@ def run(context):
             [],
         )
         self.assertTrue(
-            any(event["event_type"] == "reconciled" for event in self.runs.events(run_id))
+            any(event["event_type"] == "failure_reviewed" for event in self.runs.events(run_id))
         )
-        reconciled_again = self.runs.reconcile(run_id, "RECONCILED")
-        self.assertEqual(reconciled_again["status"], "reconciled")
+        reviewed_again = self.runs.review_failure(run_id)
+        self.assertEqual(reviewed_again["status"], "reviewed")
         self.assertEqual(
-            sum(event["event_type"] == "reconciled" for event in self.runs.events(run_id)),
+            sum(event["event_type"] == "failure_reviewed" for event in self.runs.events(run_id)),
             1,
         )
 
@@ -1281,7 +1310,7 @@ def run(context):
         final = self.wait_for_terminal(restarted_id)
         self.assertEqual(final["status"], "succeeded")
 
-    def test_reconciliation_closes_legacy_account_ambiguity_without_erasing_it(self) -> None:
+    def test_hiding_legacy_account_ambiguity_preserves_evidence(self) -> None:
         manifest = plugin_manifest(plugin_id="runner.legacy-account-ambiguity")
         self.install_plugin("def run(context):\n    return {}\n", manifest)
         run_id = "00000000-0000-0000-0000-000000000013"
@@ -1306,10 +1335,8 @@ def run(context):
                 (run_id, "known-account", "Known Account", now),
             )
 
-        with self.assertRaisesRegex(RunError, "внешний итог"):
-            self.runs.review_failure(run_id)
-        reconciled = self.runs.reconcile(run_id, "RECONCILED")
-        self.assertEqual(reconciled["status"], "reconciled")
+        reviewed = self.runs.review_failure(run_id)
+        self.assertEqual(reviewed["status"], "reviewed")
         preserved = next(
             state
             for state in self.runs.account_states(run_id)
@@ -1386,16 +1413,12 @@ def run(context):
             )
             self.runs._acquire_leases(connection, run_id, [account_id], [0])
 
-        with self.assertRaisesRegex(RunError, "защитная блокировка"):
-            self.runs.review_failure(run_id)
-        self.assertEqual(self.runs.get(run_id)["status"], "failed")
-        self.assertEqual(
-            len(self.database.all("SELECT * FROM account_leases WHERE run_id=?", (run_id,))),
-            1,
-        )
-
-        self.runs._release_leases(run_id)
         reviewed = self.runs.review_failure(run_id)
+        self.assertEqual(reviewed["status"], "reviewed")
+        self.assertEqual(
+            self.database.all("SELECT * FROM account_leases WHERE run_id=?", (run_id,)),
+            [],
+        )
 
         self.assertEqual(reviewed["status"], "reviewed")
         self.assertEqual(reviewed["error"], "known adapter failure")
@@ -1420,9 +1443,6 @@ def run(context):
             sum(event["event_type"] == "failure_reviewed" for event in self.runs.events(run_id)),
             1,
         )
-        with self.assertRaisesRegex(RunError, "needs_attention"):
-            self.runs.reconcile(run_id, "RECONCILED")
-
         restarted = self.runs.start("runner.review-failure", "run", [account_id])
         restarted_id = str(restarted["id"])
         self.assertEqual(self.wait_for_terminal(restarted_id)["status"], "succeeded")
@@ -1604,7 +1624,7 @@ def run(context):
         self.assertNotIn("AWS_SECRET_ACCESS_KEY", environment)
         self.assertNotIn("SOFT_HUB_DATA_DIR", environment)
 
-    def test_shutdown_force_stops_write_run_and_holds_lease_until_reconciled(self) -> None:
+    def test_shutdown_force_stops_write_run_and_releases_lease(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
         self.vault.import_records(
             [
@@ -1637,17 +1657,13 @@ def run(context):
         self.runs.shutdown(grace_seconds=0.2)
         final = self.runs.get(str(started["id"]))
         assert final is not None
-        self.assertEqual(final["status"], "needs_attention")
+        self.assertEqual(final["status"], "cancelled")
         self.assertEqual(
-            len(self.database.all("SELECT * FROM account_leases WHERE run_id=?", (started["id"],))),
-            1,
+            self.database.all("SELECT * FROM account_leases WHERE run_id=?", (started["id"],)),
+            [],
         )
         self.assertEqual(self.runs._processes, {})
         self.assertEqual(self.runs._threads, {})
-
-        reconciled = self.runs.reconcile(str(started["id"]), "RECONCILED")
-        self.assertEqual(reconciled["status"], "reconciled")
-        self.assertEqual(self.database.all("SELECT * FROM account_leases"), [])
 
     def test_force_stop_bypasses_safe_stop_and_kills_read_process_tree(self) -> None:
         manifest = plugin_manifest(plugin_id="runner.force-read", safe_stop=False)
@@ -1783,7 +1799,7 @@ def run(context):
         self.assertEqual(self.wait_for_terminal(holder_id)["status"], "cancelled")
         wait_until(lambda: holder_id not in self.runs._threads, timeout=5)
 
-    def test_force_stop_write_run_holds_lease_until_explicit_reconciliation(self) -> None:
+    def test_force_stop_write_run_is_terminal_and_releases_lease(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
         self.vault.import_records(
             [
@@ -1819,33 +1835,85 @@ def run(context):
             lambda: (
                 current
                 if (current := self.runs.get(run_id))
-                and current["status"] == "needs_attention"
+                and current["status"] == "cancelled"
                 else None
             ),
             timeout=5,
         )
         self.assertEqual(final["error"], "process_force_killed")
         account_state = self.runs.account_states(run_id)[0]
-        self.assertEqual(account_state["status"], "needs_attention")
-        self.assertEqual(account_state["stage"], "external_state_unknown")
+        self.assertEqual(account_state["status"], "cancelled")
+        self.assertEqual(account_state["stage"], "cancelled")
         wait_until(lambda: run_id not in self.runs._threads, timeout=5)
         leases = self.database.all(
             "SELECT * FROM account_leases WHERE run_id=?", (run_id,)
         )
-        self.assertEqual(len(leases), 1)
-        self.assertTrue(leases[0]["expires_at"].startswith("9999-12-31"))
+        self.assertEqual(leases, [])
 
-        with self.assertRaisesRegex(RunError, "внешнюю сверку"):
-            self.runs.uninstall_module("runner.force-write")
-        self.runs.reconcile(run_id, "RECONCILED")
-        reconciled_state = self.runs.account_states(run_id)[0]
-        self.assertEqual(reconciled_state["status"], "needs_attention")
-        self.assertEqual(reconciled_state["stage"], "external_state_unknown")
         removed = self.runs.uninstall_module("runner.force-write")
         self.assertTrue(removed["removed"])
         self.assertEqual(self.database.all("SELECT * FROM account_leases"), [])
 
-    def test_external_write_batch_is_allowed_and_force_stop_holds_service_lease(self) -> None:
+    def test_parallel_write_failures_release_both_accounts_and_allow_restart(self) -> None:
+        self.vault.create(TEST_MASTER_PASSWORD)
+        self.vault.import_records(
+            [
+                ImportRecord(
+                    TEST_PRIVATE_KEY_A,
+                    "parallel-a.test:48080:user-a:pass-a",
+                    "parallel-a@example.test",
+                    label="Parallel A",
+                ),
+                ImportRecord(
+                    TEST_PRIVATE_KEY_B,
+                    "parallel-b.test:48081:user-b:pass-b",
+                    "parallel-b@example.test",
+                    label="Parallel B",
+                ),
+            ]
+        )
+        account_ids = [str(account["id"]) for account in self.vault.list_accounts()]
+        manifest = plugin_manifest(
+            plugin_id="runner.parallel-failure",
+            action_risk="testnet_write",
+            account_mode="one_or_more",
+            chains=[111],
+        )
+        self.install_plugin(
+            "import time\ndef run(context):\n    time.sleep(0.2)\n"
+            "    raise RuntimeError('parallel deterministic failure')\n",
+            manifest,
+        )
+
+        first = self.runs.start(
+            "runner.parallel-failure", "run", [account_ids[0]], acknowledgement="TESTNET"
+        )
+        second = self.runs.start(
+            "runner.parallel-failure", "run", [account_ids[1]], acknowledgement="TESTNET"
+        )
+        first_id, second_id = str(first["id"]), str(second["id"])
+        self.assertEqual(self.wait_for_terminal(first_id)["status"], "failed")
+        self.assertEqual(self.wait_for_terminal(second_id)["status"], "failed")
+        self.assertEqual(
+            self.database.all(
+                "SELECT * FROM account_leases WHERE run_id IN (?,?)", (first_id, second_id)
+            ),
+            [],
+            "A visible terminal status must already mean both accounts are free",
+        )
+        wait_until(
+            lambda: first_id not in self.runs._threads and second_id not in self.runs._threads,
+            timeout=5,
+        )
+        self.assertEqual(self.database.all("SELECT * FROM account_leases"), [])
+
+        restarted = self.runs.start(
+            "runner.parallel-failure", "run", account_ids, acknowledgement="TESTNET"
+        )
+        self.assertNotIn(str(restarted["id"]), {first_id, second_id})
+        self.assertEqual(self.wait_for_terminal(str(restarted["id"]))["status"], "failed")
+
+    def test_external_write_batch_is_allowed_and_force_stop_releases_service_lease(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
         self.vault.import_records(
             [
@@ -1908,30 +1976,22 @@ def run(context):
             lambda: (
                 current
                 if (current := self.runs.get(run_id))
-                and current["status"] == "needs_attention"
+                and current["status"] == "cancelled"
                 else None
             ),
             timeout=5,
         )
         self.assertEqual(final["error"], "process_force_killed")
         account_state = self.runs.account_states(run_id)[0]
-        self.assertEqual(account_state["status"], "needs_attention")
-        self.assertEqual(account_state["stage"], "external_state_unknown")
+        self.assertEqual(account_state["status"], "cancelled")
+        self.assertEqual(account_state["stage"], "cancelled")
         wait_until(lambda: run_id not in self.runs._threads, timeout=5)
-        held = self.database.one(
-            "SELECT chain_id,expires_at FROM account_leases WHERE run_id=?",
-            (run_id,),
-        )
-        self.assertEqual(held["chain_id"], 0)
-        self.assertTrue(held["expires_at"].startswith("9999-12-31"))
-
-        self.runs.reconcile(run_id, "RECONCILED")
         self.assertEqual(
             self.database.all("SELECT * FROM account_leases WHERE run_id=?", (run_id,)),
             [],
         )
 
-    def test_account_attention_elevates_completed_and_cancelled_write_runs(self) -> None:
+    def test_account_attention_becomes_failed_evidence_without_retained_lease(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
         self.vault.import_records(
             [
@@ -1944,11 +2004,11 @@ def run(context):
         )
         account_id = self.vault.list_accounts()[0]["id"]
         cases = (
-            ("testnet-cancel", "testnet_write", [111], "raise CancelledError()", "TESTNET", 111),
-            ("external-cancel", "external_write", [], "raise CancelledError()", "", 0),
-            ("external-complete", "external_write", [], "return {'reported': True}", "", 0),
+            ("testnet-cancel", "testnet_write", [111], "raise CancelledError()", "TESTNET"),
+            ("external-cancel", "external_write", [], "raise CancelledError()", ""),
+            ("external-complete", "external_write", [], "return {'reported': True}", ""),
         )
-        for suffix, risk, chains, terminal_source, acknowledgement, lease_scope in cases:
+        for suffix, risk, chains, terminal_source, acknowledgement in cases:
             with self.subTest(case=suffix):
                 plugin_id = f"runner.attention-{suffix}"
                 manifest = plugin_manifest(
@@ -1974,20 +2034,12 @@ def run(context):
                 )
                 run_id = str(started["id"])
                 final = self.wait_for_terminal(run_id)
-                self.assertEqual(final["status"], "needs_attention")
-                self.assertEqual(final["error"], "account_state_requires_attention")
+                self.assertEqual(final["status"], "failed")
+                self.assertEqual(final["error"], "external_state_unknown")
                 state = self.runs.account_states(run_id)[0]
-                self.assertEqual(state["status"], "needs_attention")
+                self.assertEqual(state["status"], "failed")
                 self.assertEqual(state["stage"], "write_unknown")
                 wait_until(lambda: run_id not in self.runs._threads, timeout=5)
-                lease = self.database.one(
-                    "SELECT chain_id,expires_at FROM account_leases WHERE run_id=?",
-                    (run_id,),
-                )
-                self.assertEqual(lease["chain_id"], lease_scope)
-                self.assertTrue(lease["expires_at"].startswith("9999-12-31"))
-                reconciled = self.runs.reconcile(run_id, "RECONCILED")
-                self.assertEqual(reconciled["status"], "reconciled")
                 self.assertEqual(
                     self.database.all(
                         "SELECT * FROM account_leases WHERE run_id=?", (run_id,)
@@ -2077,8 +2129,19 @@ def run(context):
         )
 
     def test_start_revalidates_ready_health_before_inserting_run(self) -> None:
-        manifest = plugin_manifest(plugin_id="runner.start-health-race")
-        self.install_plugin("def run(context):\n    return {'ok': True}\n", manifest)
+        manifest = plugin_manifest(
+            plugin_id="runner.start-health-race",
+            requirements="requirements.txt",
+        )
+        installed = self.install_plugin_with_requirements(
+            "def run(context):\n    return {'ok': True}\n",
+            manifest,
+            "requests==2.32.5\n",
+        )
+        self.mark_plugin_runtime_ready(installed)
+        self.database.execute(
+            "UPDATE modules SET health='ready' WHERE id=?", (manifest["id"],)
+        )
         original_get = self.plugins.get
         calls = 0
 
@@ -2087,17 +2150,19 @@ def run(context):
             module = original_get(plugin_id)
             calls += 1
             if calls == 1:
-                self.database.execute(
-                    "UPDATE modules SET health='needs_setup' WHERE id=?",
-                    (plugin_id,),
+                marker = (
+                    Path(str(module["active_path"]))
+                    / ".venv"
+                    / ".soft-hub-ready.json"
                 )
+                marker.unlink()
             return module
 
         with mock.patch.object(
             self.plugins,
             "get",
             side_effect=mutate_health_after_initial_read,
-        ), self.assertRaisesRegex(RunError, "изменён или удалён"):
+        ), self.assertRaisesRegex(RunError, "подготовьте окружение"):
             self.runs.start("runner.start-health-race", "run", [])
 
         self.assertEqual(
@@ -2106,6 +2171,125 @@ def run(context):
             ),
             [],
         )
+
+    def test_missing_required_venv_fails_before_creating_run_or_lease(self) -> None:
+        self.vault.create(TEST_MASTER_PASSWORD)
+        self.vault.import_records(
+            [
+                ImportRecord(
+                    TEST_PRIVATE_KEY_A,
+                    "runtime-preflight.test:8080:user:pass",
+                    "runtime-preflight@example.test",
+                )
+            ]
+        )
+        account_id = self.vault.list_accounts()[0]["id"]
+        manifest = plugin_manifest(
+            plugin_id="runner.runtime-preflight",
+            requirements="requirements.txt",
+            action_risk="external_write",
+            account_mode="one_or_more",
+        )
+        self.install_plugin_with_requirements(
+            "def run(context):\n    return {'ok': True}\n",
+            manifest,
+            "requests==2.32.5\n",
+        )
+
+        with self.assertRaisesRegex(RunError, "подготовьте окружение"):
+            self.runs.start("runner.runtime-preflight", "run", [account_id])
+
+        self.assertEqual(
+            self.database.all(
+                "SELECT * FROM runs WHERE module_id='runner.runtime-preflight'"
+            ),
+            [],
+        )
+        self.assertEqual(self.database.all("SELECT * FROM account_leases"), [])
+        self.assertEqual(self.database.all("SELECT * FROM run_account_pins"), [])
+        self.assertEqual(
+            self.plugins.get("runner.runtime-preflight")["health"], "needs_setup"
+        )
+
+    def test_incompatible_required_venv_fails_before_run_or_lease(self) -> None:
+        self.vault.create(TEST_MASTER_PASSWORD)
+        self.vault.import_records(
+            [
+                ImportRecord(
+                    TEST_PRIVATE_KEY_A,
+                    "runtime-incompatible.test:8080:user:pass",
+                    "runtime-incompatible@example.test",
+                )
+            ]
+        )
+        account_id = self.vault.list_accounts()[0]["id"]
+        manifest = plugin_manifest(
+            plugin_id="runner.runtime-incompatible",
+            requirements="requirements.txt",
+            action_risk="external_write",
+            account_mode="one_or_more",
+        )
+        installed = self.install_plugin_with_requirements(
+            "def run(context):\n    return {'ok': True}\n",
+            manifest,
+            "requests==2.32.5\n",
+        )
+        self.mark_plugin_runtime_ready(installed)
+        marker = (
+            Path(str(installed["active_path"]))
+            / ".venv"
+            / ".soft-hub-ready.json"
+        )
+        state = json.loads(marker.read_text(encoding="utf-8"))
+        state["runtime_id"] = "incompatible-python-runtime"
+        marker.write_text(json.dumps(state), encoding="utf-8")
+        self.database.execute(
+            "UPDATE modules SET health='ready' WHERE id=?", (manifest["id"],)
+        )
+
+        with self.assertRaisesRegex(RunError, "подготовьте окружение"):
+            self.runs.start("runner.runtime-incompatible", "run", [account_id])
+
+        self.assertEqual(
+            self.database.all(
+                "SELECT * FROM runs WHERE module_id='runner.runtime-incompatible'"
+            ),
+            [],
+        )
+        self.assertEqual(self.database.all("SELECT * FROM account_leases"), [])
+        self.assertEqual(self.database.all("SELECT * FROM run_account_pins"), [])
+        self.assertEqual(
+            self.plugins.get("runner.runtime-incompatible")["health"],
+            "needs_setup",
+        )
+
+    def test_required_venv_is_snapshotted_and_core_python_is_never_fallback(self) -> None:
+        manifest = plugin_manifest(
+            plugin_id="runner.runtime-python-selection",
+            requirements="requirements.txt",
+        )
+        installed = self.install_plugin_with_requirements(
+            "def run(context):\n    return {'ok': True}\n",
+            manifest,
+            "requests==2.32.5\n",
+        )
+        plugin_python = self.mark_plugin_runtime_ready(installed)
+        self.database.execute(
+            "UPDATE modules SET health='ready' WHERE id=?",
+            (manifest["id"],),
+        )
+
+        prepared = self.runs._preflight_run(
+            self.plugins.get(str(manifest["id"])),
+            "run",
+            [],
+            {},
+            "",
+            batch=False,
+        )
+
+        self.assertEqual(prepared["python"], plugin_python)
+        self.assertNotEqual(prepared["python"], Path(sys.executable))
 
     def test_actions_from_one_manifest_receive_only_their_exact_secret_grant(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
@@ -3064,38 +3248,41 @@ class AccountLeaseTestCase(unittest.TestCase):
             self.database.one("SELECT id FROM accounts WHERE id=?", (account_id,))
         )
 
-    def test_startup_recovery_marks_orphans_and_holds_write_leases_for_reconciliation(self) -> None:
+    def test_startup_recovery_fails_orphans_and_releases_stale_leases(self) -> None:
         active_statuses = ("queued", "starting", "running", "cancelling")
-        for status in (*active_statuses, "succeeded"):
+        for status in (*active_statuses, "succeeded", "needs_attention"):
             self.insert_run(f"run-{status}", status)
         with self.database.transaction() as connection:
             self.runs._acquire_leases(connection, "run-running", [self.account_ids[0]], [111])
+            self.runs._acquire_leases(
+                connection, "run-needs_attention", [self.account_ids[0]], [222]
+            )
 
         RunManager(self.database, self.paths, self.plugins, self.vault)
         for status in active_statuses:
             row = self.database.one("SELECT * FROM runs WHERE id=?", (f"run-{status}",))
             assert row is not None
-            self.assertEqual(row["status"], "needs_attention")
+            self.assertEqual(row["status"], "failed")
             self.assertIsNotNone(row["finished_at"])
             self.assertIn("restarted", row["error"])
         self.assertEqual(
             self.database.one("SELECT status FROM runs WHERE id='run-succeeded'")["status"],
             "succeeded",
         )
-        leases = self.database.all("SELECT * FROM account_leases")
-        self.assertEqual(len(leases), 1)
-        self.assertEqual(leases[0]["run_id"], "run-running")
-        self.assertTrue(leases[0]["expires_at"].startswith("9999-12-31"))
-
-        reconciled = self.runs.reconcile("run-running", "RECONCILED")
-        self.assertEqual(reconciled["status"], "reconciled")
-        self.assertEqual(self.database.all("SELECT * FROM account_leases"), [])
+        legacy_attention = self.database.one(
+            "SELECT status,error FROM runs WHERE id='run-needs_attention'"
+        )
+        self.assertEqual(
+            legacy_attention,
+            {"status": "failed", "error": "external_state_unknown"},
+        )
         self.assertTrue(
             any(
-                event["event_type"] == "reconciled"
-                for event in self.runs.events("run-running")
+                event["event_type"] == "attention_released"
+                for event in self.runs.events("run-needs_attention")
             )
         )
+        self.assertEqual(self.database.all("SELECT * FROM account_leases"), [])
 
 
 if __name__ == "__main__":

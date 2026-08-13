@@ -169,7 +169,7 @@ _REPORT_ACCOUNT_STATUSES = (
 _EXTERNAL_WRITE_LEASE_SCOPE = 0
 _REFERRAL_PARENT_LEASE_SCOPE = -1
 _ACTIVE_RUN_STATUSES = ("queued", "starting", "running", "cancelling")
-_OPERATIONAL_RUN_STATUSES = (*_ACTIVE_RUN_STATUSES, "needs_attention")
+_OPERATIONAL_RUN_STATUSES = _ACTIVE_RUN_STATUSES
 _BATCH_SPEC_FIELDS = {
     "module_id",
     "action_id",
@@ -709,26 +709,46 @@ class RunManager:
     def _recover_orphans(self) -> None:
         now = utc_now()
         with self.database.transaction() as connection:
+            # `needs_attention` used to retain account leases until an operator
+            # completed a separate confirmation flow.  It is a historical
+            # terminal outcome now: preserve its events/error/account stage,
+            # but make the run retryable immediately.
             connection.execute(
-                "UPDATE runs SET status='needs_attention',finished_at=?,"
-                "error='Hub was restarted during this run' "
+                "INSERT INTO run_events(run_id,created_at,level,event_type,message,data_json) "
+                "SELECT id,?,'info','attention_released',"
+                "'Старая защитная блокировка снята; журнал и результаты сохранены',"
+                "'{\"original_status\":\"needs_attention\"}' FROM runs "
+                "WHERE status='needs_attention'",
+                (now,),
+            )
+            connection.execute(
+                "UPDATE run_account_states SET status='failed',updated_at=? "
+                "WHERE status='needs_attention'",
+                (now,),
+            )
+            connection.execute(
+                "UPDATE runs SET status='failed',finished_at=COALESCE(finished_at,?),"
+                "error=COALESCE(error,'external_state_unknown'),pid=NULL "
+                "WHERE status='needs_attention'",
+                (now,),
+            )
+            connection.execute(
+                "UPDATE runs SET status='failed',finished_at=?,"
+                "error='Hub was restarted during this run',pid=NULL "
                 "WHERE status IN ('queued','starting','running','cancelling')",
                 (now,),
             )
             connection.execute(
-                "UPDATE account_leases SET expires_at='9999-12-31T23:59:59.999+00:00' "
-                "WHERE run_id IN (SELECT id FROM runs WHERE status='needs_attention')"
-            )
-            connection.execute(
-                "UPDATE run_account_states SET status='needs_attention',stage='hub_restarted',"
+                "UPDATE run_account_states SET status='failed',stage='hub_restarted',"
                 "last_message='Hub был перезапущен во время выполнения',updated_at=? "
-                "WHERE status IN ('queued','running') AND run_id IN "
-                "(SELECT id FROM runs WHERE status='needs_attention')",
+                "WHERE status IN ('queued','running')",
                 (now,),
             )
             connection.execute(
-                "DELETE FROM run_account_pins WHERE run_id IN "
-                "(SELECT id FROM runs WHERE status='needs_attention')"
+                "DELETE FROM account_leases"
+            )
+            connection.execute(
+                "DELETE FROM run_account_pins"
             )
 
     def start(
@@ -860,6 +880,17 @@ class RunManager:
         if module["health"] != "ready":
             raise RunError("Сначала подготовьте окружение плагина")
         manifest = module["manifest"]
+        requirements = manifest["runtime"].get("requirements")
+        python = Path(sys.executable)
+        if requirements:
+            plugin_path = Path(module["active_path"])
+            plugin_python = self.plugins.python_for(plugin_path, requirements)
+            if plugin_python is None:
+                self.plugins.mark_runtime_needs_setup(
+                    str(module["id"]), str(module["active_path"])
+                )
+                raise RunError("Сначала подготовьте окружение плагина")
+            python = plugin_python
         action = next((item for item in manifest["actions"] if item["id"] == action_id), None)
         if not action:
             raise RunError("Действие не объявлено плагином")
@@ -935,6 +966,7 @@ class RunManager:
         return {
             "module": module,
             "action": action,
+            "python": python,
             "account_ids": list(account_ids),
             "secret_permissions": secret_permissions,
             "account_resources": account_resources,
@@ -958,6 +990,7 @@ class RunManager:
                 run_id,
                 prepared["module"],
                 prepared["action"],
+                prepared["python"],
                 prepared["account_ids"],
                 prepared["secret_permissions"],
                 prepared["account_resources"],
@@ -1141,12 +1174,6 @@ class RunManager:
     def _release_pins(self, run_id: str) -> None:
         self.database.execute("DELETE FROM run_account_pins WHERE run_id=?", (run_id,))
 
-    def _hold_leases(self, run_id: str) -> None:
-        self.database.execute(
-            "UPDATE account_leases SET expires_at='9999-12-31T23:59:59.999+00:00' WHERE run_id=?",
-            (run_id,),
-        )
-
     def _finish_run(
         self,
         run_id: str,
@@ -1156,7 +1183,7 @@ class RunManager:
         summary: dict[str, Any] | None,
         error: str | None,
     ) -> None:
-        """Commit run terminal state and unresolved account projections together."""
+        """Commit a terminal run state and its unresolved account projections."""
         now = utc_now()
         with self.database.transaction() as connection:
             self._recover_legacy_account_summaries(connection, run_id, now)
@@ -1175,19 +1202,20 @@ class RunManager:
                 "WHERE run_id=? AND status='needs_attention' LIMIT 1",
                 (run_id,),
             ).fetchone()
-            if account_requires_attention:
-                # A typed per-account ambiguity is stronger evidence than the
-                # bootstrap's generic completed/cancelled terminal frame.
-                status = "needs_attention"
-                error = error or "account_state_requires_attention"
+            if status == "needs_attention" or account_requires_attention:
+                # Keep the adapter's exact event/data as evidence, but do not
+                # turn uncertainty into a persistent operational lock.
+                status = "failed"
+                error = error or "external_state_unknown"
+                connection.execute(
+                    "UPDATE run_account_states SET status='failed',updated_at=? "
+                    "WHERE run_id=? AND status='needs_attention'",
+                    (now, run_id),
+                )
             if status == "cancelled":
                 account_status = "cancelled"
                 stage = "cancelled"
                 message = "Запуск остановлен до получения итогового account_state"
-            elif status == "needs_attention":
-                account_status = "needs_attention"
-                stage = "external_state_unknown"
-                message = "Внешний итог неизвестен; требуется ручная сверка"
             else:
                 account_status = "unknown"
                 stage = "unreported"
@@ -1215,6 +1243,10 @@ class RunManager:
                 "WHERE run_id=? AND status IN ('queued','running')",
                 (account_status, stage, message, now, run_id),
             )
+            # A terminal status and lease release are one database boundary.
+            # The UI may offer an immediate retry as soon as it observes the
+            # status, so there must never be a visible terminal-but-leased gap.
+            connection.execute("DELETE FROM account_leases WHERE run_id=?", (run_id,))
 
     def _recover_legacy_account_summaries(
         self,
@@ -1255,6 +1287,7 @@ class RunManager:
             status = str(row["status"])
             stage = _LEGACY_ACCOUNT_SUMMARY_STAGES[status]
             progress = None if status == "needs_attention" else 1.0
+            stored_status = "failed" if status == "needs_attention" else status
             connection.execute(
                 "UPDATE run_account_states SET status=?,stage=?,"
                 "progress=CASE WHEN ? IS NULL THEN progress ELSE MAX(progress,?) END,"
@@ -1262,20 +1295,21 @@ class RunManager:
                 "'Итог восстановлен из структурированного account_summary' "
                 "ELSE last_message END,updated_at=? "
                 "WHERE run_id=? AND account_id=? AND status IN ('queued','running')",
-                (status, stage, progress, progress, now, run_id, account_id),
+                (stored_status, stage, progress, progress, now, run_id, account_id),
             )
             self._insert_event(
                 connection,
                 run_id,
                 now,
-                "success" if status == "succeeded" else "warning",
+                "success" if stored_status == "succeeded" else "warning",
                 "account_state",
                 "Hub восстановил итог старого адаптера из структурированного account_summary",
                 account_id,
                 {
-                    "status": status,
+                    "status": stored_status,
                     "stage": stage,
                     "source": "legacy_account_summary",
+                    **({"reported_status": status} if stored_status != status else {}),
                     **({"progress": progress} if progress is not None else {}),
                 },
             )
@@ -1285,6 +1319,7 @@ class RunManager:
         run_id: str,
         module: dict[str, Any],
         action: dict[str, Any],
+        python: Path,
         account_ids: list[str],
         secret_permissions: list[str],
         account_resources: list[str],
@@ -1304,10 +1339,6 @@ class RunManager:
         redactor = Redactor()
         process: subprocess.Popen[str] | None = None
         slot_acquired = False
-        ambiguous_capability = (
-            action["risk"] != "read"
-            or (referral_config or {}).get("parent_access") == "exclusive"
-        )
         try:
             # A blocking acquire made queued runs deaf to Stop while every slot
             # was occupied. Poll with a short timeout so cancellation can finish
@@ -1357,9 +1388,11 @@ class RunManager:
                 return
             plugin_path = Path(module["active_path"])
             manifest = module["manifest"]
-            python = self.plugins.python_for(
-                plugin_path, manifest["runtime"].get("requirements")
-            ) or Path(sys.executable)
+            if manifest["runtime"].get("requirements") and not python.is_file():
+                self.plugins.mark_runtime_needs_setup(
+                    str(module["id"]), str(module["active_path"])
+                )
+                raise RunError("Окружение плагина больше не готово; подготовьте его заново")
             scratch = self.paths.runs / run_id / "scratch"
             scratch.mkdir(parents=True, exist_ok=False, mode=0o700)
             context = {
@@ -1559,7 +1592,7 @@ class RunManager:
                 cancellation_requested = run_id in self._cancel_requests
                 force_killed = run_id in self._force_killed
             if force_killed:
-                status = "needs_attention" if ambiguous_capability else "cancelled"
+                status = "cancelled"
                 progress = self._current_progress(run_id)
                 error = "process_force_killed"
             elif terminal == "completed" and exit_code == 0:
@@ -1572,9 +1605,7 @@ class RunManager:
                 error = None
             else:
                 status = (
-                    "needs_attention"
-                    if ambiguous_capability
-                    else "cancelled"
+                    "cancelled"
                     if cancellation_requested
                     else "failed"
                 )
@@ -1598,19 +1629,16 @@ class RunManager:
             with self._lock:
                 cancellation_requested = run_id in self._cancel_requests
                 force_killed = run_id in self._force_killed
-            ambiguous_write = process is not None and ambiguous_capability
             failure_status = (
                 "cancelled"
-                if cancellation_requested and not ambiguous_write
-                else "needs_attention"
-                if ambiguous_write
+                if cancellation_requested
                 else "failed"
             )
             failure_error = (
                 "process_force_killed"
                 if force_killed
                 else None
-                if cancellation_requested and not ambiguous_write
+                if cancellation_requested
                 else message
             )
             self._finish_run(
@@ -1646,11 +1674,7 @@ class RunManager:
             with self._lock:
                 self._processes.pop(run_id, None)
             try:
-                final = self.database.one("SELECT status FROM runs WHERE id=?", (run_id,))
-                if final and final["status"] == "needs_attention":
-                    self._hold_leases(run_id)
-                else:
-                    self._release_leases(run_id)
+                self._release_leases(run_id)
             finally:
                 self._release_pins(run_id)
                 if slot_acquired:
@@ -2107,55 +2131,6 @@ class RunManager:
             except PluginError as error:
                 raise RunError(str(error)) from error
 
-    def reconcile(self, run_id: str, acknowledgement: str) -> dict[str, Any]:
-        if acknowledgement != "RECONCILED":
-            raise RunError("После внешней проверки введите RECONCILED")
-        now = utc_now()
-        with self.database.transaction() as connection:
-            run = connection.execute(
-                "SELECT r.*,m.name AS module_name,v.manifest_json AS run_manifest_json "
-                "FROM runs r JOIN modules m ON m.id=r.module_id "
-                "LEFT JOIN module_versions v ON v.module_id=r.module_id "
-                "AND v.version=r.module_version WHERE r.id=?",
-                (run_id,),
-            ).fetchone()
-            if not run:
-                raise RunError("Запуск не найден")
-            original_status = str(run["status"])
-            # A successful request is safe to retry after a lost HTTP
-            # response.  No duplicate audit event is appended.
-            if original_status == "reconciled":
-                return self._present_run(dict(run))
-            account_ambiguity = connection.execute(
-                "SELECT 1 FROM run_account_states "
-                "WHERE run_id=? AND status='needs_attention' LIMIT 1",
-                (run_id,),
-            ).fetchone()
-            retained_lease = connection.execute(
-                "SELECT 1 FROM account_leases WHERE run_id=? LIMIT 1",
-                (run_id,),
-            ).fetchone()
-            if original_status != "needs_attention" and not account_ambiguity and not retained_lease:
-                raise RunError("Сверка доступна только для запуска со статусом needs_attention")
-            connection.execute("DELETE FROM account_leases WHERE run_id=?", (run_id,))
-            connection.execute(
-                "UPDATE runs SET status='reconciled',finished_at=COALESCE(finished_at,?) WHERE id=?",
-                (now, run_id),
-            )
-            connection.execute(
-                "INSERT INTO run_events(run_id,created_at,level,event_type,message,data_json) "
-                "VALUES (?,?,?,?,?,?)",
-                (
-                    run_id,
-                    now,
-                    "success",
-                    "reconciled",
-                    "Оператор подтвердил внешнюю сверку; account leases сняты",
-                    json.dumps({"original_status": original_status}, ensure_ascii=False),
-                ),
-            )
-        return self.get(run_id) or run
-
     def review_failure(self, run_id: str) -> dict[str, Any]:
         """Close a known failure notification without claiming reconciliation.
 
@@ -2164,9 +2139,8 @@ class RunManager:
         matters for adapters that completed their process cleanly after one
         account failed.  Reviewing only changes the run's operational
         projection and appends an audit event; account states, results and the
-        original error text are not rewritten.  needs_attention and every run
-        that still owns a lease always require the stricter reconciliation
-        path.
+        original error text are not rewritten.  This is only notification
+        housekeeping: terminal account leases are always released separately.
         """
         now = utc_now()
         with self.database.transaction() as connection:
@@ -2182,43 +2156,22 @@ class RunManager:
             original_status = str(run["status"])
             if original_status == "reviewed":
                 return self._present_run(dict(run))
-            if original_status == "needs_attention":
-                raise RunError(
-                    "Внешний итог не определён: выполните внешнюю сверку, "
-                    "а не обычную отметку просмотра"
-                )
             if original_status in _ACTIVE_RUN_STATUSES:
                 raise RunError("Запуск ещё не завершён")
             if original_status == "reconciled":
-                raise RunError("Запуск уже закрыт внешней сверкой")
+                return self._present_run(dict(run))
 
             account_issue = connection.execute(
                 "SELECT COUNT(*) AS count FROM run_account_states WHERE run_id=? AND ("
-                "status IN ('partial','failed','blocked') OR "
+                "status IN ('partial','failed','blocked','needs_attention') OR "
                 "(status='unknown' AND stage NOT IN ('historical','reconciled')))",
                 (run_id,),
             ).fetchone()
-            account_ambiguity = connection.execute(
-                "SELECT 1 FROM run_account_states "
-                "WHERE run_id=? AND status='needs_attention' LIMIT 1",
-                (run_id,),
-            ).fetchone()
-            if account_ambiguity:
-                raise RunError(
-                    "Хотя бы один аккаунт имеет неопределённый внешний итог; "
-                    "требуется внешняя сверка"
-                )
             issue_count = int(account_issue["count"] if account_issue else 0)
-            if original_status != "failed" and issue_count == 0:
+            if original_status not in {"failed", "needs_attention"} and issue_count == 0:
                 raise RunError("У запуска нет активного уведомления об известной ошибке")
-            lease = connection.execute(
-                "SELECT 1 FROM account_leases WHERE run_id=? LIMIT 1",
-                (run_id,),
-            ).fetchone()
-            if lease:
-                raise RunError(
-                    "У запуска осталась защитная блокировка; просмотр ошибки не заменяет внешнюю сверку"
-                )
+            # Defensive cleanup for databases created by older Hub versions.
+            connection.execute("DELETE FROM account_leases WHERE run_id=?", (run_id,))
             connection.execute(
                 "UPDATE runs SET status='reviewed',finished_at=COALESCE(finished_at,?) "
                 "WHERE id=? AND status=?",
@@ -2232,7 +2185,7 @@ class RunManager:
                     now,
                     "info",
                     "failure_reviewed",
-                    "Оператор просмотрел известную ошибку; журнал и результаты сохранены",
+                    "Уведомление об ошибке скрыто; журнал и результаты сохранены",
                     json.dumps(
                         {
                             "original_status": original_status,
@@ -2324,22 +2277,21 @@ class RunManager:
         now = utc_now()
         with self.database.transaction() as connection:
             connection.execute(
-                "UPDATE runs SET status='needs_attention',finished_at=COALESCE(finished_at,?),"
+                "UPDATE runs SET status='cancelled',finished_at=COALESCE(finished_at,?),"
                 "error=COALESCE(error,'Hub shutdown interrupted this run'),pid=NULL "
                 "WHERE status IN ('queued','starting','running','cancelling')",
                 (now,),
             )
             connection.execute(
-                "UPDATE account_leases SET expires_at='9999-12-31T23:59:59.999+00:00' "
-                "WHERE run_id IN (SELECT id FROM runs WHERE status='needs_attention')"
+                "DELETE FROM account_leases"
             )
             connection.execute(
-                "UPDATE run_account_states SET status='needs_attention',"
+                "UPDATE run_account_states SET status='cancelled',"
                 "stage='hub_shutdown',last_message='Hub завершил работу во время выполнения',"
-                "updated_at=? WHERE status IN ('queued','running') AND run_id IN "
-                "(SELECT id FROM runs WHERE status='needs_attention')",
+                "updated_at=? WHERE status IN ('queued','running')",
                 (now,),
             )
+            connection.execute("DELETE FROM run_account_pins")
 
     def _current_progress(self, run_id: str) -> float:
         row = self.database.one("SELECT progress FROM runs WHERE id=?", (run_id,))
@@ -2412,7 +2364,7 @@ class RunManager:
             "SELECT "
             "SUM(CASE WHEN status IN ('queued','starting','running','cancelling') "
             "THEN 1 ELSE 0 END) AS active_runs,"
-            "SUM(CASE WHEN status='needs_attention' THEN 1 ELSE 0 END) AS needs_attention,"
+            "0 AS needs_attention,"
             "(SELECT COUNT(*) FROM runs attention_run WHERE "
             "attention_run.status NOT IN ('reconciled','reviewed') AND ("
             "attention_run.status IN ('failed','needs_attention') OR EXISTS ("

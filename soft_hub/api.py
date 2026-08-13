@@ -38,7 +38,6 @@ _RUN_LOG_ROUTE = re.compile(r"^/api/runs/([0-9a-f-]+)/log$")
 _RUN_ACCOUNTS_ROUTE = re.compile(r"^/api/runs/([0-9a-f-]+)/accounts$")
 _RUN_STOP_ROUTE = re.compile(r"^/api/runs/([0-9a-f-]+)/stop$")
 _RUN_FORCE_STOP_ROUTE = re.compile(r"^/api/runs/([0-9a-f-]+)/force-stop$")
-_RUN_RECONCILE_ROUTE = re.compile(r"^/api/runs/([0-9a-f-]+)/reconcile$")
 _RUN_REVIEW_ROUTE = re.compile(r"^/api/runs/([0-9a-f-]+)/review$")
 _MODULE_ROUTE = re.compile(r"^/api/modules/([a-z0-9.-]+)$")
 _MODULE_RUN_ROUTE = re.compile(r"^/api/modules/([a-z0-9.-]+)/run$")
@@ -594,11 +593,6 @@ class HubRequestHandler(BaseHTTPRequestHandler):
             self._json(
                 app.runs.force_stop(match.group(1), acknowledgement),
                 status=202,
-            )
-        elif match := _RUN_RECONCILE_ROUTE.fullmatch(path):
-            self._require_unlocked_projection()
-            self._json(
-                app.runs.reconcile(match.group(1), str(body.get("acknowledgement", "")))
             )
         elif match := _RUN_REVIEW_ROUTE.fullmatch(path):
             self._require_unlocked_projection()

@@ -103,6 +103,53 @@ class PluginRuntimeInvariantTests(unittest.TestCase):
                 self.manager.python_for(plugin_path, "requirements.txt"), candidate
             )
 
+    def test_legacy_ready_marker_survives_core_lock_only_runtime_change(self) -> None:
+        plugin_path, candidate = self.install_plugin()
+        compatibility_id = (
+            "python-build-standalone:20260805:cpython-3.12.13:win32-x64"
+        )
+        previous_runtime_id = f"{compatibility_id}:1111111111111111"
+        self.write_ready_state(
+            plugin_path,
+            runtime_id=previous_runtime_id,
+            home=Path(sys.executable).resolve().parent,
+        )
+
+        with mock.patch(
+            "soft_hub.plugins.runtime_fingerprint", return_value=compatibility_id
+        ):
+            self.assertEqual(
+                self.manager.python_for(plugin_path, "requirements.txt"), candidate
+            )
+
+        state = json.loads(
+            (plugin_path / ".venv" / ".soft-hub-ready.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(state["runtime_id"], compatibility_id)
+
+    def test_legacy_marker_from_another_interpreter_build_is_rejected(self) -> None:
+        plugin_path, _candidate = self.install_plugin()
+        self.write_ready_state(
+            plugin_path,
+            runtime_id=(
+                "python-build-standalone:20260804:cpython-3.12.13:win32-x64:"
+                "1111111111111111"
+            ),
+            home=Path(sys.executable).resolve().parent,
+        )
+
+        with mock.patch(
+            "soft_hub.plugins.runtime_fingerprint",
+            return_value=(
+                "python-build-standalone:20260805:cpython-3.12.13:win32-x64"
+            ),
+        ):
+            self.assertIsNone(
+                self.manager.python_for(plugin_path, "requirements.txt")
+            )
+
     def test_prepare_uses_bundled_pip_wheel_without_package_index(self) -> None:
         plugin_path, candidate = self.install_plugin()
         runtime_id = "managed-runtime:offline-pip-test"

@@ -4,17 +4,23 @@ import hashlib
 import json
 import os
 import platform
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME = "Soft Hub"
-APP_VERSION = "0.6.13"
+APP_VERSION = "0.6.14"
 PLUGIN_SCHEMA_VERSION = 1
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_UNPACKED_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_FILES = 4_000
 MAX_JSON_BYTES = 2 * 1024 * 1024
+
+_MANAGED_PLUGIN_RUNTIME_RE = re.compile(
+    r"^(python-build-standalone:[^:]+:cpython-\d+\.\d+\.\d+:"
+    r"[a-z0-9_]+-[a-z0-9_]+)(?::[0-9a-f]{16,64})?$"
+)
 
 
 def project_root() -> Path:
@@ -44,12 +50,37 @@ def runtime_fingerprint() -> str:
     """Stable plugin-ABI identity for the interpreter hosting Soft Hub."""
     managed = managed_runtime()
     if managed:
-        return str(managed[1]["runtime_id"])
+        runtime_id = str(managed[1]["runtime_id"])
+        match = _MANAGED_PLUGIN_RUNTIME_RE.fullmatch(runtime_id)
+        if match:
+            # The final component of the managed runtime ID is the core
+            # requirements lock digest.  It decides whether the bundled runtime
+            # itself must be rebuilt, but it does not change the ABI of an
+            # already-created plugin venv.
+            return match.group(1)
+        # Unknown historical marker formats remain exact-match only.
+        return runtime_id
     executable = Path(sys.executable).resolve()
     executable_id = hashlib.sha256(str(executable).encode()).hexdigest()[:16]
     return (
         f"developer-python:{sys.version_info.major}.{sys.version_info.minor}."
         f"{sys.version_info.micro}:{platform.machine().lower()}:{executable_id}"
+    )
+
+
+def runtime_fingerprints_compatible(candidate: object, current: str | None = None) -> bool:
+    """Compare current and legacy plugin markers without weakening ABI checks."""
+    if not isinstance(candidate, str) or not candidate:
+        return False
+    expected = current or runtime_fingerprint()
+    if candidate == expected:
+        return True
+    candidate_match = _MANAGED_PLUGIN_RUNTIME_RE.fullmatch(candidate)
+    expected_match = _MANAGED_PLUGIN_RUNTIME_RE.fullmatch(expected)
+    return bool(
+        candidate_match
+        and expected_match
+        and candidate_match.group(1) == expected_match.group(1)
     )
 
 

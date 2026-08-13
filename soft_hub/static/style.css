@@ -42,6 +42,10 @@
   --map-canvas: #f3ecdf;
   --map-contour: rgba(133, 101, 70, 0.105);
   --map-grain: rgba(89, 69, 50, 0.055);
+  --scrollbar-track: rgba(77, 60, 45, 0.08);
+  --scrollbar-thumb: #8e7560;
+  --scrollbar-thumb-hover: #715b49;
+  --scrollbar-thumb-active: #ad4e34;
   --shadow: 0 20px 54px rgba(68, 49, 34, 0.1);
   --shadow-small: 0 9px 26px rgba(68, 49, 34, 0.07);
   --radius-xl: 24px;
@@ -97,6 +101,10 @@
   --map-canvas: #24201b;
   --map-contour: rgba(218, 182, 130, 0.09);
   --map-grain: rgba(246, 228, 196, 0.045);
+  --scrollbar-track: rgba(244, 229, 205, 0.06);
+  --scrollbar-thumb: #8b7968;
+  --scrollbar-thumb-hover: #b6a08b;
+  --scrollbar-thumb-active: #e17b58;
   --shadow: 0 20px 54px rgba(0, 0, 0, 0.28);
   --shadow-small: 0 9px 26px rgba(0, 0, 0, 0.22);
   color-scheme: dark;
@@ -131,6 +139,7 @@ body {
 
 html {
   background: var(--canvas);
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -151,6 +160,68 @@ body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+}
+
+/* One quiet, tactile scroll language for the page and every nested work surface. */
+:where(*) {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+:where(*)::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+:where(*)::-webkit-scrollbar-track {
+  border: 4px solid transparent;
+  border-radius: 999px;
+  background-color: var(--scrollbar-track);
+  background-clip: padding-box;
+}
+
+:where(*)::-webkit-scrollbar-thumb {
+  min-width: 44px;
+  min-height: 44px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  transition: background-color var(--motion-fast) ease, border-width var(--motion-fast) ease;
+}
+
+:where(*)::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+:where(*)::-webkit-scrollbar-thumb:active {
+  border-width: 2px;
+  background-color: var(--scrollbar-thumb-active);
+}
+
+:where(*)::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+:where(*)::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:where(
+  .modal,
+  .referral-inspector,
+  .batch-run-list,
+  .account-selector,
+  .drawer,
+  .drawer-account-table-wrap,
+  .event-console,
+  .activity-table-wrap,
+  .result-report-table-scroll
+) {
+  scrollbar-gutter: stable;
 }
 
 .ambient-scene {
@@ -6241,6 +6312,34 @@ select:focus {
   .result-group-chevron { grid-column: 3; grid-row: 1 / span 2; }
 }
 
+@media (prefers-contrast: more) {
+  :root,
+  :root[data-theme="dark"] {
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: var(--ink);
+    --scrollbar-thumb-hover: var(--acid-deep);
+    --scrollbar-thumb-active: var(--acid-deep);
+  }
+}
+
+@media (forced-colors: active) {
+  :where(*) {
+    scrollbar-color: ButtonText Canvas;
+  }
+
+  :where(*)::-webkit-scrollbar-track {
+    border-color: Canvas;
+    background-color: Canvas;
+    forced-color-adjust: auto;
+  }
+
+  :where(*)::-webkit-scrollbar-thumb {
+    border-color: Canvas;
+    background-color: ButtonText;
+    forced-color-adjust: auto;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -6250,6 +6349,8 @@ select:focus {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  :where(*)::-webkit-scrollbar-thumb { transition: none; }
 
   .patch-radar-sweep { animation: none !important; transform: rotate(38deg); }
   .patch-radar-blip { display: none; animation: none !important; }

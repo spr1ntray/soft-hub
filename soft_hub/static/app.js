@@ -109,7 +109,7 @@ const REFERRAL_ZOOM_STEP = 1.2;
 const REFERRAL_MINIMAP_WIDTH = 180;
 const REFERRAL_MINIMAP_HEIGHT = 112;
 const ACTIVE_RUN_STATUSES = new Set(['queued', 'starting', 'running', 'cancelling']);
-const ATTENTION_RUN_STATUSES = new Set(['failed', 'needs_attention']);
+const ATTENTION_RUN_STATUSES = new Set(['failed']);
 const ACTIVE_ACCOUNT_STATUSES = new Set(['queued', 'running']);
 const ATTENTION_ACCOUNT_STATUSES = new Set(['partial', 'failed', 'blocked', 'needs_attention']);
 
@@ -121,8 +121,8 @@ const statusNames = {
   succeeded: 'Завершено',
   failed: 'Ошибка',
   cancelled: 'Остановлено',
-  needs_attention: 'Нужно проверить',
-  reconciled: 'Сверено',
+  needs_attention: 'Внешний итог неясен',
+  reconciled: 'Закрыто',
   reviewed: 'Просмотрено',
 };
 
@@ -134,7 +134,7 @@ const accountStatusNames = {
   failed: 'Ошибка',
   skipped: 'Пропущено',
   blocked: 'Заблокировано',
-  needs_attention: 'Нужно проверить',
+  needs_attention: 'Внешний итог неясен',
   cancelled: 'Остановлено',
   unknown: 'Не определено',
 };
@@ -1270,7 +1270,7 @@ function renderDock() {
   const presence = $('.dock-presence');
   presence.dataset.state = attentionCount ? 'attention' : activeCount ? 'active' : 'idle';
   const presenceCopy = attentionCount
-    ? `${attentionCount} ${countWord(attentionCount, 'задача', 'задачи', 'задач')} ${attentionCount === 1 ? 'ждёт' : 'ждут'} проверки`
+    ? `${attentionCount} ${countWord(attentionCount, 'ошибка', 'ошибки', 'ошибок')}`
     : activeCount
       ? `${activeCount} ${countWord(activeCount, 'задача', 'задачи', 'задач')} ${activeCount === 1 ? 'работает' : 'работают'}`
       : 'Очередь свободна';
@@ -1293,7 +1293,6 @@ function renderMetrics() {
   $('[data-nav-count="attention"]').textContent = stats.attention_runs || '';
   const patchCount = state.patchFeed.filter((patch) => patch.installable === true).length;
   $('[data-nav-count="patches"]').textContent = patchCount || '';
-  $('#attention-banner').hidden = stats.needs_attention === 0;
   $('#live-pill-text').textContent = stats.active_runs
     ? `${stats.active_runs} ${stats.active_runs === 1 ? 'задача работает' : 'задачи работают'}`
     : 'Система готова';
@@ -1307,9 +1306,7 @@ function renderMetrics() {
     commandTitle.textContent = nextCommandTitle;
     replayBlurText(commandTitle);
   }
-  $('#command-detail').textContent = stats.needs_attention
-    ? 'Есть запуски с неясным результатом. Проверьте журнал перед повтором.'
-    : 'Приватники и пароли остаются на этом компьютере. Каждый софт работает отдельно.';
+  $('#command-detail').textContent = 'Приватники и пароли остаются на этом компьютере. Каждый софт работает отдельно.';
   const onboarding = [
     { id: 'vault', done: state.data.vault.unlocked, action: 'vault', label: state.data.vault.exists ? 'Разблокировать Vault' : 'Создать Vault' },
     { id: 'accounts', done: !locked && stats.accounts > 0, action: 'import', label: 'Импортировать аккаунты' },
@@ -2359,7 +2356,7 @@ function activityRunStage(run) {
     running: [actionName, 'Работает'],
     cancelling: ['Останавливается', actionName],
     failed: ['Запуск завершился с ошибкой', actionName],
-    needs_attention: ['Нужно проверить внешний результат', actionName],
+    needs_attention: ['Запуск завершился с ошибкой', actionName],
   };
   return stages[run.status] || [statusNames[run.status] || run.status, actionName];
 }
@@ -2376,10 +2373,7 @@ function activityResolutionKind(row, runRows = [row]) {
   if (!activityProjectionMatches(row, 'attention')) return '';
   if (ACTIVE_RUN_STATUSES.has(row.run_status)) return '';
   if (['reconciled', 'reviewed'].includes(row.run_status)) return '';
-  return row.run_status === 'needs_attention'
-    || runRows.some((candidate) => candidate.status === 'needs_attention')
-    ? 'reconcile'
-    : 'review';
+  return runRows.length ? 'review' : '';
 }
 
 function accountFreeActivityRows(filter) {
@@ -2433,7 +2427,7 @@ function activityStageLabel(value) {
     failed: 'Ошибка этапа',
     cancelled: 'Остановлено',
     historical: 'История',
-    reconciled: 'Сверка',
+    reconciled: 'История',
     hub_shutdown: 'Остановка Hub',
     preflight: 'Проверяет условия',
     fill: 'Заполняет данные',
@@ -2441,13 +2435,13 @@ function activityStageLabel(value) {
     action_failed: 'Ошибка действия',
     external_state_unknown: 'Внешний результат неясен',
     preflight_failed: 'Проверка не пройдена',
-    external_reconciliation: 'Сверяет внешний результат',
+    external_reconciliation: 'Проверяет внешний результат',
     adapter_error: 'Ошибка адаптера',
     write_gate: 'Проверяет разрешение на запись',
     write_blocked: 'Запись заблокирована',
     account_preflight: 'Проверяет аккаунт',
-    reconciliation: 'Сверяет результат',
-    needs_reconciliation: 'Требуется сверка',
+    reconciliation: 'Проверяет результат',
+    needs_reconciliation: 'Результат не определён',
     profile_validation: 'Проверяет аккаунт',
     validated: 'Аккаунт проверен',
     registration: 'Регистрирует аккаунт',
@@ -2494,9 +2488,7 @@ function activityTableMarkup(rows) {
       renderedRunActions.add(row.run_id);
       const resolutionControl = resolutionKind === 'review'
         ? `<button class="activity-resolution activity-resolution--review" type="button" data-review-run="${escapeHtml(row.run_id)}" data-activity-control="review:${escapeHtml(row.run_id)}" aria-label="Скрыть ошибку ${escapeHtml(row.module_name)} из текущих уведомлений">${iconMarkup('check')}<span>Скрыть</span></button>`
-        : resolutionKind === 'reconcile'
-          ? `<button class="activity-resolution activity-resolution--reconcile" type="button" data-reconcile-run="${escapeHtml(row.run_id)}" data-activity-control="reconcile:${escapeHtml(row.run_id)}" aria-label="Открыть внешнюю сверку запуска ${escapeHtml(row.module_name)}">${iconMarkup('search')}<span>Сверить</span></button>`
-          : '';
+        : '';
       const moduleCell = index === 0 ? `
         <th class="activity-module-cell" scope="rowgroup" rowspan="${group.length}">
           ${moduleIconMarkup(module)}
@@ -2576,7 +2568,7 @@ function renderActivityPanel() {
   $('#activity-filter-active-count').textContent = `${activeCount}${state.activityAccountsTruncated.active ? '+' : ''}`;
   $('#activity-filter-attention-count').textContent = `${attentionCount}${state.activityAccountsTruncated.attention ? '+' : ''}`;
   panel.dataset.filter = filter;
-  $('#activity-panel-title').textContent = filter === 'attention' ? 'Нужно проверить' : 'Текущие запуски';
+  $('#activity-panel-title').textContent = filter === 'attention' ? 'Ошибки запусков' : 'Текущие запуски';
   $$('#activity-panel-filters button').forEach((button) => {
     const selected = button.dataset.activityFilter === filter;
     button.classList.toggle('is-active', selected);
@@ -2630,11 +2622,11 @@ function renderActivityPanel() {
   const staleCopy = state.activityAccountsError ? ' · данные могут быть устаревшими' : '';
   const activitySummary = rows.length
     ? `${rows.length} ${countWord(rows.length, 'аккаунт', 'аккаунта', 'аккаунтов')} · ${runCount} ${countWord(runCount, 'запуск', 'запуска', 'запусков')} · ${moduleCount} ${countWord(moduleCount, 'софт', 'софта', 'софтов')}${truncationCopy}${sourceLimitCopy}${staleCopy}`
-    : filter === 'attention' ? 'Ошибок и блокировок нет' : 'Очередь свободна';
+    : filter === 'attention' ? 'Ошибок нет' : 'Очередь свободна';
   setTextIfChanged($('#activity-panel-summary'), activitySummary);
-  $('#activity-empty-title').textContent = filter === 'attention' ? 'Всё проверено' : 'Очередь свободна';
+  $('#activity-empty-title').textContent = filter === 'attention' ? 'Ошибок нет' : 'Очередь свободна';
   $('#activity-empty-copy').textContent = filter === 'attention'
-    ? 'Ошибок и запусков с неясным результатом нет.'
+    ? 'Все завершённые запуски в порядке.'
     : 'Сейчас ничего не запущено. Можно выбрать софты и отправить их одной пачкой.';
   const tableBody = $('#activity-table-body');
   const focusedControl = tableBody.contains(document.activeElement)
@@ -2644,7 +2636,6 @@ function renderActivityPanel() {
   const focusRunId = focusedControl?.dataset.openRun
     || focusedControl?.dataset.requestRunStop
     || focusedControl?.dataset.reviewRun
-    || focusedControl?.dataset.reconcileRun
     || '';
   const tableMarkup = activityTableMarkup(visibleRows);
   if (tableBody.innerHTML !== tableMarkup) {
@@ -2742,15 +2733,6 @@ async function openRunStopFlow(runId) {
   const forceStop = $('#drawer-force-stop');
   const target = !safeStop.hidden ? safeStop : forceStop;
   target?.focus({ preventScroll: true });
-}
-
-async function openRunReconciliationFlow(runId) {
-  await openRunDrawer(runId);
-  if (state.selectedRunId !== runId) return;
-  $('#drawer-technical-log').open = true;
-  syncDrawerLogLiveRegion();
-  $('#drawer-resolution-note').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  $('#drawer-reconcile').focus({ preventScroll: true });
 }
 
 const RESULT_REPORT_ATTENTION_STATUSES = new Set(['failed', 'blocked', 'needs_attention', 'unknown']);
@@ -3041,7 +3023,7 @@ function resultReportSystemMetrics(report, rows) {
     { title: 'Успешно', value: succeeded, note: 'подтверждено lifecycle', accent: 'teal' },
     { title: 'Частично', value: partial, note: 'есть полезный результат', accent: 'butter' },
     {
-      title: 'Нужно проверить',
+      title: 'С ошибками',
       value: attention,
       note: missing
         ? `${ACTIVE_RUN_STATUSES.has(report?.run_status) ? 'ещё без результата' : 'без результата'}: ${missing}`
@@ -3184,7 +3166,7 @@ function resultGroupSummary(items) {
   const attention = items.filter((item) => resultTone(item.status) === 'attention').length;
   return [
     succeeded ? `<span data-tone="success">${succeeded} успешно</span>` : '',
-    attention ? `<span data-tone="attention">${attention} нужно проверить</span>` : '',
+    attention ? `<span data-tone="attention">${attention} ${countWord(attention, 'ошибка', 'ошибки', 'ошибок')}</span>` : '',
     `<span>${items.length} ${countWord(items.length, 'результат', 'результата', 'результатов')}</span>`,
   ].filter(Boolean).join('');
 }
@@ -4872,7 +4854,7 @@ function renderDrawerAccounts(run, accounts) {
     const active = rows.filter((account) => ACTIVE_ACCOUNT_STATUSES.has(account.status)).length;
     const recordedErrors = rows.filter((account) => ATTENTION_ACCOUNT_STATUSES.has(account.status)).length;
     const resolution = run.status === 'reconciled'
-      ? 'сверка закрыта'
+      ? 'запуск закрыт'
       : run.status === 'reviewed'
         ? 'ошибка просмотрена'
         : '';
@@ -4880,7 +4862,7 @@ function renderDrawerAccounts(run, accounts) {
     const summaryCopy = [
       `${rows.length} ${countWord(rows.length, 'аккаунт', 'аккаунта', 'аккаунтов')}`,
       active ? `${active} ${countWord(active, 'работает', 'работают', 'работают')}` : '',
-      attention ? `${attention} ${countWord(attention, 'требует', 'требуют', 'требуют')} проверки` : '',
+      attention ? `${attention} ${countWord(attention, 'ошибка', 'ошибки', 'ошибок')}` : '',
       resolution && recordedErrors
         ? `${recordedErrors} ${countWord(recordedErrors, 'ошибка сохранена', 'ошибки сохранены', 'ошибок сохранено')} · ${resolution}`
         : '',
@@ -4904,11 +4886,8 @@ function syncDrawerLogLiveRegion() {
 function runResolutionKind(run, accounts = []) {
   if (!run || ACTIVE_RUN_STATUSES.has(run.status)) return '';
   if (['reconciled', 'reviewed'].includes(run.status)) return '';
-  if (run.status === 'needs_attention' || accounts.some((account) => account.status === 'needs_attention')) {
-    return 'reconcile';
-  }
   const knownAccountIssue = accounts.some((account) => (
-    ['partial', 'failed', 'blocked'].includes(account.status)
+    ['partial', 'failed', 'blocked', 'needs_attention'].includes(account.status)
     || (account.status === 'unknown' && !['historical', 'reconciled'].includes(account.stage))
   ));
   return run.status === 'failed' || knownAccountIssue ? 'review' : '';
@@ -5077,18 +5056,15 @@ async function updateDrawer() {
     $('#drawer-stop-note').hidden = !active || safeStop;
     $('#drawer-stop-note').textContent = safeStop
       ? ''
-      : 'Мягкая остановка для этого софта не настроена. «Остановить принудительно» завершит процесс через систему. Если софт что-то записывал, после этого нужно будет проверить внешний результат.';
+      : 'Мягкая остановка для этого софта не настроена. «Остановить принудительно» завершит процесс через систему и сохранит журнал запуска.';
     const resolutionKind = runResolutionKind(run, accountRows);
     const resolutionNote = $('#drawer-resolution-note');
     resolutionNote.hidden = !resolutionKind;
     resolutionNote.dataset.resolution = resolutionKind;
     resolutionNote.textContent = resolutionKind === 'review'
-      ? 'Итог понятен. Посмотрите общий лог и нажмите «Скрыть уведомление». Ошибка останется в истории, а софт можно будет запустить снова.'
-      : resolutionKind === 'reconcile'
-        ? 'Внешний результат неясен. Сначала проверьте блокчейн, API или профиль AdsPower и убедитесь, что повторный запуск безопасен. Затем завершите сверку — Hub снимет блокировку аккаунтов.'
-        : '';
+      ? 'Посмотрите общий лог, если нужны детали. «Скрыть уведомление» уберёт ошибку с панели, но оставит её в истории.'
+      : '';
     $('#drawer-review').hidden = resolutionKind !== 'review';
-    $('#drawer-reconcile').hidden = resolutionKind !== 'reconcile';
   } catch (error) {
     if (state.selectedRunId === runId && state.drawerRequestGeneration === generation) {
       $('#drawer-account-table-wrap').hidden = true;
@@ -5175,7 +5151,7 @@ async function forceStopSelectedRun() {
     title: 'Остановить софт принудительно?',
     message: snapshot?.status === 'queued'
       ? 'Уберём задачу из очереди — процесс ещё не запущен.'
-      : 'Hub сразу завершит весь процесс. Если софт уже что-то записал, результат может остаться неясным, а аккаунты будут заблокированы до сверки.',
+      : 'Hub сразу завершит весь процесс. Журнал останется в истории, а аккаунты сразу освободятся для следующего запуска.',
     confirmLabel: 'Остановить принудительно',
     phrase: 'FORCE STOP',
   });
@@ -5184,7 +5160,7 @@ async function forceStopSelectedRun() {
   setBusy(button, true, 'Завершаем…');
   try {
     await jsonPost(`/api/runs/${encodeURIComponent(state.selectedRunId)}/force-stop`, { acknowledgement: 'FORCE STOP' });
-    toast('Процесс остановлен. Hub проверяет итоговый статус.', 'success', 5600);
+    toast('Процесс остановлен. Аккаунты освободятся сразу после завершения процесса.', 'success', 5600);
     await refresh();
   } catch (error) {
     toast(error.message, 'error', 7000);
@@ -5194,41 +5170,15 @@ async function forceStopSelectedRun() {
   }
 }
 
-async function reconcileSelectedRun() {
-  if (!state.selectedRunId) return;
-  const confirmed = await requestDestructiveConfirmation({
-    title: 'Вы уже проверили внешний результат?',
-    message: 'Проверьте блокчейн, API или профиль AdsPower и убедитесь, что запуск можно безопасно повторить. После подтверждения Hub снимет блокировки с аккаунтов.',
-    confirmLabel: 'Сверка выполнена',
-    phrase: 'RECONCILED',
-  });
-  if (!confirmed || !state.selectedRunId) return;
-  const button = $('#drawer-reconcile');
-  setBusy(button, true, 'Снимаем блокировки…');
-  try {
-    const resolved = await jsonPost(`/api/runs/${encodeURIComponent(state.selectedRunId)}/reconcile`, { acknowledgement: 'RECONCILED' });
-    await applyAttentionResolution(resolved);
-    toast('Сверка закрыта, блокировки сняты. Софт можно запускать снова.', 'success', 6200);
-  } catch (error) {
-    toast(error.message, 'error', 6000);
-  } finally {
-    setBusy(button, false);
-  }
-}
-
 async function applyAttentionResolution(resolvedRun) {
   if (!resolvedRun?.id) return;
   const runId = String(resolvedRun.id);
   const previousRun = state.data?.runs.find((run) => run.id === runId);
-  const previousStatus = previousRun?.status;
   state.activityAccountsGeneration += 1;
   state.activityAccountRows = state.activityAccountRows.filter((row) => row.run_id !== runId);
   if (previousRun) Object.assign(previousRun, resolvedRun);
   if (state.data?.stats) {
     state.data.stats.attention_runs = Math.max(0, Number(state.data.stats.attention_runs || 0) - 1);
-    if (resolvedRun.status === 'reconciled' && previousStatus === 'needs_attention') {
-      state.data.stats.needs_attention = Math.max(0, Number(state.data.stats.needs_attention || 0) - 1);
-    }
   }
   renderActivityPanel();
   renderDock();
@@ -5360,10 +5310,10 @@ async function toggleModule(moduleId) {
 async function deleteModule(moduleId, button) {
   const module = state.data.modules.find((item) => item.id === moduleId);
   if (!module) return;
-  const active = state.data.runs.filter((run) => run.module_id === moduleId && ['queued', 'starting', 'running', 'cancelling', 'needs_attention'].includes(run.status));
+  const active = state.data.runs.filter((run) => run.module_id === moduleId && ACTIVE_RUN_STATUSES.has(run.status));
   if (active.length) {
-    toast(`Сначала остановите активные запуски ${moduleDisplayName(module)} и закройте сверки: ${active.length}.`, 'error', 6200);
-    openActivityPanel(active.some((run) => ATTENTION_RUN_STATUSES.has(run.status)) ? 'attention' : 'active', button);
+    toast(`Сначала остановите активные запуски ${moduleDisplayName(module)}: ${active.length}.`, 'error', 6200);
+    openActivityPanel('active', button);
     return;
   }
   const confirmed = await requestDestructiveConfirmation({
@@ -5932,7 +5882,6 @@ function bindEvents() {
   $('#drawer-stop').addEventListener('click', stopSelectedRun);
   $('#drawer-force-stop').addEventListener('click', forceStopSelectedRun);
   $('#drawer-review').addEventListener('click', reviewSelectedRunFailure);
-  $('#drawer-reconcile').addEventListener('click', reconcileSelectedRun);
   $('#activity-panel-close').addEventListener('click', () => closeActivityPanel());
   $('#activity-panel-refresh').addEventListener('click', refreshActivityPanel);
   $$('#activity-panel-filters button').forEach((button) => button.addEventListener('click', () => setActivityFilter(button.dataset.activityFilter)));
@@ -5986,7 +5935,7 @@ function bindEvents() {
       !runDrawer.hidden
       && !runDrawer.contains(event.target)
       && !event.target.closest('[data-open-run]')
-      && !event.target.closest('[data-request-run-stop], [data-review-run], [data-reconcile-run]')
+      && !event.target.closest('[data-request-run-stop], [data-review-run]')
     ) {
       closeRunDrawer({ restoreFocus: false });
     }
@@ -5996,7 +5945,6 @@ function bindEvents() {
     if (target.dataset.openRun) void toggleRunDrawer(target.dataset.openRun);
     if (target.dataset.requestRunStop) openRunStopFlow(target.dataset.requestRunStop);
     if (target.dataset.reviewRun) reviewRunAttention(target.dataset.reviewRun, target);
-    if (target.dataset.reconcileRun) openRunReconciliationFlow(target.dataset.reconcileRun);
     if (target.dataset.prepareModule) prepareModule(target.dataset.prepareModule, target);
     if (target.dataset.installPatch) installPatchAsset(target.dataset.installPatch, target);
     if (target.hasAttribute('data-import-for-run')) {

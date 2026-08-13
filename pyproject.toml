@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sprintray-soft-hub"
-version = "0.6.13"
+version = "0.6.14"
 description = "Local desktop control plane for Python automation modules"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

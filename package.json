@@ -1,7 +1,7 @@
 {
   "name": "soft-hub",
   "productName": "Soft Hub",
-  "version": "0.6.13",
+  "version": "0.6.14",
   "description": "Локальный хаб для запуска и контроля Python-софтов",
   "author": "sprintray",
   "private": true,

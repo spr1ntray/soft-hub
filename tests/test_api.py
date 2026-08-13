@@ -554,7 +554,7 @@ class ApiSecurityTestCase(unittest.TestCase):
         )
         self.assertEqual(final["error"], "process_force_killed")
 
-    def test_known_failure_review_api_is_distinct_from_external_reconciliation(self) -> None:
+    def test_known_failure_review_api_preserves_evidence_and_reconcile_route_is_removed(self) -> None:
         archive = write_plugin_archive(
             Path(self.temporary.name) / "review-api.softhub.zip",
             plugin_manifest(plugin_id="api.review-test"),
@@ -619,8 +619,8 @@ class ApiSecurityTestCase(unittest.TestCase):
             body=json.dumps({"acknowledgement": "RECONCILED"}),
             headers=headers,
         )
-        self.assertEqual(status, 400)
-        self.assertIn("needs_attention", json.loads(body)["error"])
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body), {"error": "Маршрут не найден"})
 
     def test_technical_log_export_is_authenticated_exact_and_redacted_again(self) -> None:
         archive = write_plugin_archive(
@@ -1012,7 +1012,7 @@ class ApiSecurityTestCase(unittest.TestCase):
         attention_rows = [
             (
                 f"attention-{index:03d}",
-                "needs_attention",
+                "failed",
                 f"2026-02-01T00:{index // 60:02d}:{index % 60:02d}+00:00",
             )
             for index in range(501)
@@ -1032,14 +1032,13 @@ class ApiSecurityTestCase(unittest.TestCase):
         payload = self.application.bootstrap()
         run_ids = [run["id"] for run in payload["runs"]]
         self.assertEqual(payload["stats"]["active_runs"], 1)
-        self.assertEqual(payload["stats"]["needs_attention"], 501)
+        self.assertEqual(payload["stats"]["needs_attention"], 0)
         self.assertEqual(payload["stats"]["attention_runs"], 501)
-        self.assertTrue(payload["runs_truncated"])
+        self.assertFalse(payload["runs_truncated"])
         self.assertEqual(run_ids[0], "active-older-than-terminals")
         self.assertIn("active-older-than-terminals", run_ids)
-        self.assertIn("terminal-30", run_ids)
         self.assertNotIn("terminal-00", run_ids)
-        self.assertEqual(len(run_ids), 530)
+        self.assertEqual(len(run_ids), 31)
 
     def test_run_api_cannot_bypass_manifest_option_schema(self) -> None:
         manifest = plugin_manifest(plugin_id="api.option-guard")
@@ -1671,7 +1670,6 @@ class ApiSecurityTestCase(unittest.TestCase):
             ),
             (f"/api/runs/{run_id}/stop", {}),
             (f"/api/runs/{run_id}/force-stop", {"acknowledgement": "FORCE STOP"}),
-            (f"/api/runs/{run_id}/reconcile", {"acknowledgement": "RECONCILED"}),
             (f"/api/runs/{run_id}/review", {}),
             ("/api/settings/capsolver", {"action": "clear"}),
             ("/api/settings/adspower", {"action": "clear"}),

@@ -30,6 +30,7 @@ from .config import (
     HubPaths,
     bundled_pip_wheel,
     runtime_fingerprint,
+    runtime_fingerprints_compatible,
 )
 from .database import Database, utc_now
 from .github_install import GitHubPackage
@@ -1803,13 +1804,10 @@ class PluginManager:
         requirements = manifest["runtime"].get("requirements")
         if not requirements:
             return "ready"
-        content = (path / requirements).read_text(encoding="utf-8")
-        has_dependencies = any(
-            line.strip() and not line.lstrip().startswith("#") for line in content.splitlines()
-        )
-        if not has_dependencies:
-            return "ready"
-        return "ready" if self.python_for(path, requirements) else "needs_setup"
+        try:
+            return "ready" if self.python_for(path, requirements) else "needs_setup"
+        except OSError:
+            return "needs_setup"
 
     @staticmethod
     def _venv_python(plugin_path: Path) -> Path:
@@ -1852,10 +1850,36 @@ class PluginManager:
         expected_home = Path(sys.executable).resolve().parent
         if Path(home).expanduser().resolve() != expected_home:
             return None
-        return candidate if (
+        current_runtime_id = runtime_fingerprint()
+        if not (
             state.get("requirements_sha256") == expected
-            and state.get("runtime_id") == runtime_fingerprint()
-        ) else None
+            and runtime_fingerprints_compatible(
+                state.get("runtime_id"), current_runtime_id
+            )
+        ):
+            return None
+
+        # 0.6.13 and older wrote the whole managed-runtime cache identity into
+        # this marker, including the core requirements lock digest.  Migrate it
+        # only after the requirement digest, venv home and interpreter family
+        # have all passed compatibility checks above.
+        if state.get("runtime_id") != current_runtime_id:
+            migrated = dict(state)
+            migrated["runtime_id"] = current_runtime_id
+            temporary = marker.with_name(f".soft-hub-ready-{uuid.uuid4()}.tmp")
+            try:
+                temporary.write_text(
+                    json.dumps(migrated, ensure_ascii=False, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                try:
+                    temporary.chmod(0o600)
+                except OSError:
+                    pass
+                os.replace(temporary, marker)
+            except OSError:
+                temporary.unlink(missing_ok=True)
+        return candidate
 
     def prepare(self, plugin_id: str) -> dict[str, Any]:
         with self._mutation_lock:
@@ -1968,15 +1992,11 @@ class PluginManager:
                         raise PluginError("Плагин не найден")
                     blocker = connection.execute(
                         "SELECT id,status FROM runs WHERE module_id=? "
-                        "AND status IN ('queued','starting','running','cancelling','needs_attention') "
+                        "AND status IN ('queued','starting','running','cancelling') "
                         "ORDER BY requested_at DESC LIMIT 1",
                         (plugin_id,),
                     ).fetchone()
                     if blocker:
-                        if blocker["status"] == "needs_attention":
-                            raise PluginError(
-                                "Нельзя удалить плагин: сначала выполните внешнюю сверку запуска needs_attention"
-                            )
                         raise PluginError("Нельзя удалить плагин, пока у него есть активный запуск")
 
                     version_rows = connection.execute(
@@ -2065,6 +2085,15 @@ class PluginManager:
                 raise PluginError("Плагин не найден")
             return self.get(plugin_id) or {}
 
+    def mark_runtime_needs_setup(self, plugin_id: str, active_path: str) -> None:
+        """Invalidate only the module snapshot whose runtime failed preflight."""
+        with self._mutation_lock:
+            self.database.execute(
+                "UPDATE modules SET health='needs_setup',updated_at=? "
+                "WHERE id=? AND active_path=? AND health!='removed'",
+                (utc_now(), plugin_id, active_path),
+            )
+
     def get(self, plugin_id: str) -> dict[str, Any] | None:
         with self._mutation_lock:
             row = self.database.one(
@@ -2086,4 +2115,13 @@ class PluginManager:
     def _present(self, row: dict[str, Any]) -> dict[str, Any]:
         row["enabled"] = bool(row["enabled"])
         row["manifest"] = json.loads(row.pop("manifest_json"))
+        actual_health = self._health(row["manifest"], Path(row["active_path"]))
+        if actual_health != row["health"]:
+            refreshed_at = utc_now()
+            self.database.execute(
+                "UPDATE modules SET health=?,updated_at=? WHERE id=? AND active_path=?",
+                (actual_health, refreshed_at, row["id"], row["active_path"]),
+            )
+            row["health"] = actual_health
+            row["updated_at"] = refreshed_at
         return row
