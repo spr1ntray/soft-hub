@@ -78,6 +78,7 @@ const state = {
     releaseNotes: [],
     checkedAt: '',
     errorKind: '',
+    message: '',
     installIssue: '',
   },
   coreUpdateAutoCheckStarted: false,
@@ -973,6 +974,13 @@ function normalizeCoreUpdatePayload(payload, fallbackPhase = '') {
   }
   const error = source.error ?? source.message;
   if (next.phase === 'error' || error) next.errorKind = coreUpdateErrorKind(error);
+  if (typeof source.message === 'string') {
+    next.message = source.message
+      .replace(/[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 280);
+  }
   return next;
 }
 
@@ -1097,13 +1105,13 @@ function coreUpdatePresentation(phase, update) {
     },
     error: {
       stateLabel: 'НЕ ПОЛУЧИЛОСЬ',
-      title: update.errorKind === 'verification' ? 'Файл не прошёл проверку' : 'Не получилось проверить обновление',
-      copy: update.errorKind === 'verification'
+      title: update.errorKind === 'verification' ? 'Файл не прошёл проверку' : 'Обновление остановлено',
+      copy: update.message || (update.errorKind === 'verification'
         ? 'Мы остановили установку. Текущая версия и ваши данные не изменились.'
         : update.errorKind === 'offline'
           ? 'Проверьте интернет и попробуйте ещё раз. Hub продолжит работать как обычно.'
-          : 'Hub не смог закончить обновление. Текущая версия и ваши данные остались на месте.',
-      primary: [update.errorKind === 'verification' ? 'download' : 'check', update.errorKind === 'verification' ? 'Скачать заново' : 'Попробовать снова', 'ink'],
+          : 'Hub не смог закончить обновление. Текущая версия и ваши данные остались на месте.'),
+      primary: [availableVersion ? 'download' : 'check', availableVersion ? 'Скачать ещё раз' : 'Попробовать снова', 'ink'],
       secondary: ['guide', 'Открыть инструкцию'],
     },
     unsupported: {

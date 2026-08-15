@@ -1549,6 +1549,9 @@ class StaticDOMTests(unittest.TestCase):
                 "if (progress.phase !== 'downloading' || progress.percent !== 42.4 || progress.total !== 20) throw new Error('bad progress');",
                 "const failure = normalizeCoreUpdatePayload({status:'error',message:'network request failed'});",
                 "if (failure.phase !== 'error' || failure.errorKind !== 'offline') throw new Error('bad error state');",
+                "if (failure.message !== 'network request failed') throw new Error('safe updater message was lost');",
+                "const sanitized = normalizeCoreUpdatePayload({status:'error',message:'  failed\\nagain\\u202eevil  '});",
+                "if (sanitized.message !== 'failed again evil') throw new Error('updater message was not sanitized');",
                 "const retry = normalizeCoreUpdatePayload({status:'downloaded',installIssue:'  Vault  не ответил\\nповторите  '});",
                 "if (retry.installIssue !== 'Vault не ответил повторите') throw new Error('bad install issue');",
             )

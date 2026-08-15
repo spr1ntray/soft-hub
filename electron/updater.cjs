@@ -268,12 +268,18 @@ function parseChecksumManifest(value, expectedName) {
 async function fetchRedirectSafe(fetchImpl, initialUrl, { allowedHosts, headers, signal }) {
   let current = checkedHttpsUrl(initialUrl, allowedHosts);
   for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect += 1) {
-    const response = await fetchImpl(current.href, {
-      method: 'GET',
-      headers,
-      redirect: 'manual',
-      signal,
-    });
+    let response;
+    try {
+      response = await fetchImpl(current.href, {
+        method: 'GET',
+        headers,
+        redirect: 'manual',
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof UpdateError || error?.name === 'AbortError' || signal?.aborted) throw error;
+      throw new UpdateError('Не удалось подключиться к GitHub. Проверьте интернет и попробуйте ещё раз.', 'github_request_failed');
+    }
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       if (redirect === MAX_REDIRECTS) throw new UpdateError('Слишком много перенаправлений.', 'too_many_redirects');
       const location = response.headers.get('location');

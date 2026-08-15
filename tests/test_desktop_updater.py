@@ -154,6 +154,17 @@ assert.throws(() => parseChecksumManifest(`${digest}  Soft-Hub-1.2.0-arm64.dmg\n
   );
   assert.equal(requests, 1, 'unsafe redirects must be rejected before a second request');
 
+  await assert.rejects(
+    fetchRedirectSafe(async () => {
+      throw new Error('Redirect was cancelled');
+    }, 'https://github.com/spr1ntray/soft-hub/releases/download/v1.2.0/file', {
+      allowedHosts: new Set(['github.com', 'release-assets.githubusercontent.com']),
+      headers: {},
+      signal: new AbortController().signal,
+    }),
+    /подключиться к GitHub/,
+  );
+
   const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'soft-hub-cache-prune-'));
   const updates = path.join(cacheRoot, 'updates');
   fs.mkdirSync(updates);
@@ -719,6 +730,8 @@ async function checkedDownload(updater) {
         self.assertIn("event.senderFrame !== mainWindow.webContents.mainFrame", main)
         self.assertIn("activeRunsForUpdate", main)
         self.assertIn("lockVaultForUpdate", main)
+        self.assertIn("createElectronManualFetch((options) => net.request(options))", main)
+        self.assertNotIn("net.fetch(", main)
         self.assertIn("stopHubAndWait", main)
         recovery = main.index("async function recoverCoreAfterUpdateFailure")
         relaunch = main.index("app.relaunch()", recovery)

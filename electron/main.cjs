@@ -14,6 +14,7 @@ let hubUpdater;
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 const updaterRuntime = singleInstance ? require('./updater.cjs') : null;
+const manualFetchRuntime = singleInstance ? require('./manual-fetch.cjs') : null;
 app.setName('Soft Hub');
 app.enableSandbox();
 
@@ -251,12 +252,15 @@ async function recoverCoreAfterUpdateFailure() {
 
 function setupUpdater() {
   const { HubUpdater, UPDATE_IPC } = updaterRuntime;
+  const { createElectronManualFetch } = manualFetchRuntime;
   hubUpdater = new HubUpdater({
     currentVersion: app.getVersion(),
     platform: process.platform,
     arch: process.arch,
     userDataPath: app.getPath('userData'),
-    fetchImpl: (url, options) => net.fetch(url, options),
+    // net.fetch rejects `redirect: 'manual'`. The adapter keeps Chromium's
+    // system proxy support while exposing each redirect for allow-list checks.
+    fetchImpl: createElectronManualFetch((options) => net.request(options)),
     enabled: app.isPackaged,
     onStateChange: broadcastUpdaterState,
     getActiveRuns: activeRunsForUpdate,

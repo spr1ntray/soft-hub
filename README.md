@@ -2,28 +2,30 @@
 
 Soft Hub — приложение, в котором удобно держать аккаунты, запускать свои софты и смотреть, что с ними происходит. Всё находится в одном окне: база профилей, настройки, параллельные запуски, прогресс, результаты и безопасные журналы.
 
-Актуальная версия — **Soft Hub 0.6.15**.
+Актуальная версия — **Soft Hub 0.6.16**.
 
 ## Скачать опубликованную версию
 
-- **[Скачать для Windows 10/11 x64](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.15/Soft-Hub-0.6.15-x64.exe)** — установщик `.exe`;
-- **[Скачать для Mac с Apple Silicon](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.15/Soft-Hub-0.6.15-arm64.dmg)** — установщик `.dmg`.
+- **[Скачать для Windows 10/11 x64](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.16/Soft-Hub-0.6.16-x64.exe)** — установщик `.exe`;
+- **[Скачать для Mac с Apple Silicon](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.16/Soft-Hub-0.6.16-arm64.dmg)** — установщик `.dmg`.
 
 После скачивания запустите файл двойным кликом. На Windows откроется обычный мастер установки; на Mac перетащите **Soft Hub** в **Applications**.
 
-В папке `INSTALLERS` на странице репозитория находится только инструкция — это нормально. Сами крупные установщики хранятся в [GitHub Releases → Assets](https://github.com/spr1ntray/soft-hub/releases/tag/v0.6.15), а ссылки выше скачивают их напрямую.
+В папке `INSTALLERS` на странице репозитория находится только инструкция — это нормально. Сами крупные установщики хранятся в [GitHub Releases → Assets](https://github.com/spr1ntray/soft-hub/releases/tag/v0.6.16), а ссылки выше скачивают их напрямую.
 
 ## Установка
 
-Готовые публичные установщики публикуются в [GitHub Releases](https://github.com/spr1ntray/soft-hub/releases/latest). Для версии `0.6.15` доступны:
+Готовые публичные установщики публикуются в [GitHub Releases](https://github.com/spr1ntray/soft-hub/releases/latest). Для версии `0.6.16` доступны:
 
-- `Soft-Hub-0.6.15-arm64.dmg` — macOS 12+ на Mac с Apple Silicon;
-- `Soft-Hub-0.6.15-x64.exe` — Windows 10/11 x64;
+- `Soft-Hub-0.6.16-arm64.dmg` — macOS 12+ на Mac с Apple Silicon;
+- `Soft-Hub-0.6.16-x64.exe` — Windows 10/11 x64;
 - `SHA256SUMS` — контрольные суммы файлов релиза.
 
 Начните с [`INSTALLERS/README_FIRST_RU.md`](INSTALLERS/README_FIRST_RU.md). Python, Node.js, Git, отдельную базу данных и другие служебные программы устанавливать не нужно — всё необходимое уже находится внутри Soft Hub.
 
 Сборки пока не имеют полноценной публичной подписи. macOS может попросить подтвердить запуск в **System Settings → Privacy & Security**, а Windows — показать SmartScreen. Продолжайте только если получили установщик из доверенного источника и сверили SHA-256.
+
+Версии до `0.6.16` могли найти новое обновление, но не скачать GitHub asset из-за несовместимости с redirect Electron. Для такого Hub один раз установите `0.6.16` вручную поверх текущей версии. Данные останутся на месте; дальнейшие обновления снова работают из приложения.
 
 ## Что умеет Soft Hub
 
