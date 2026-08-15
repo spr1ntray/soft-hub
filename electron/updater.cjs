@@ -32,6 +32,35 @@ const RELEASE_HOSTS = new Set([
   'objects.githubusercontent.com',
   'release-assets.githubusercontent.com',
 ]);
+// v0.6.14 predates repository-level immutable releases. Keep one exact,
+// compiled-in bridge so older local builds can reach it without accepting an
+// arbitrary mutable release. Any changed release identity, commit, asset ID,
+// size or GitHub-computed digest fails closed. Remove this bridge after the
+// first immutable public release has become the minimum supported version.
+const LEGACY_PINNED_RELEASES = Object.freeze({
+  '0.6.14': Object.freeze({
+    releaseId: 369702046,
+    targetCommitish: '426e39ce5c8ba9d264d0e95d641b4dc622e27b2b',
+    publishedAt: '2026-08-13T06:22:20Z',
+    assets: Object.freeze({
+      SHA256SUMS: Object.freeze({
+        id: 512584062,
+        size: 182,
+        digest: 'sha256:043cb96ac3eb93f6f312ccc6069acc46b1389c4d311959c9fc983dbf6efab95a',
+      }),
+      'Soft-Hub-0.6.14-arm64.dmg': Object.freeze({
+        id: 512584063,
+        size: 164471289,
+        digest: 'sha256:3150eb3e0b4bf21313bfce4844821742e0821656cd8ae728976693ed2a627db5',
+      }),
+      'Soft-Hub-0.6.14-x64.exe': Object.freeze({
+        id: 512584061,
+        size: 126548589,
+        digest: 'sha256:ad18af83dcf8bbe49c24805d3af3fe50855c3f3ef689730867e9faebfd0cbf47',
+      }),
+    }),
+  }),
+});
 const CACHED_INSTALLER_RE = /^Soft-Hub-(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-(?:arm64\.dmg|x64\.exe)(?:\.part)?$/;
 
 class UpdateError extends Error {
@@ -126,18 +155,41 @@ function checkedAsset(asset, version, name, maximumSize) {
   if (asset.state !== undefined && asset.state !== 'uploaded') {
     throw new UpdateError(`Файл ${name} ещё не готов.`, 'asset_not_ready');
   }
-  let apiDigest = null;
-  if (asset.digest !== undefined && asset.digest !== null && asset.digest !== '') {
-    const match = /^sha256:([a-f0-9]{64})$/.exec(String(asset.digest));
-    if (!match) throw new UpdateError(`GitHub вернул некорректный digest для ${name}.`, 'invalid_asset_digest');
-    apiDigest = match[1];
+  const digestMatch = /^sha256:([a-f0-9]{64})$/.exec(String(asset.digest || ''));
+  if (!digestMatch) {
+    throw new UpdateError(`GitHub не подтвердил SHA-256 файла ${name}.`, 'asset_digest_required');
   }
   return Object.freeze({
     name,
     size,
     url: checkedReleaseAssetUrl(asset.browser_download_url, version, name),
-    apiDigest,
+    apiDigest: digestMatch[1],
   });
+}
+
+function matchesPinnedLegacyRelease(payload, version) {
+  const pin = LEGACY_PINNED_RELEASES[version];
+  if (!pin || !Array.isArray(payload.assets)) return false;
+  if (
+    payload.id !== pin.releaseId
+    || payload.target_commitish !== pin.targetCommitish
+    || payload.published_at !== pin.publishedAt
+  ) return false;
+  const expectedNames = Object.keys(pin.assets);
+  if (payload.assets.length !== expectedNames.length) return false;
+  for (const name of expectedNames) {
+    const matches = payload.assets.filter((asset) => asset && asset.name === name);
+    if (matches.length !== 1) return false;
+    const asset = matches[0];
+    const expected = pin.assets[name];
+    if (
+      asset.id !== expected.id
+      || asset.size !== expected.size
+      || asset.digest !== expected.digest
+      || (asset.state !== undefined && asset.state !== 'uploaded')
+    ) return false;
+  }
+  return true;
 }
 
 function inspectRelease(payload, currentVersion, platform, arch) {
@@ -156,6 +208,12 @@ function inspectRelease(payload, currentVersion, platform, arch) {
   }
   if (compareSemver(version, currentVersion) <= 0) {
     return Object.freeze({ status: 'up_to_date', version, releaseNotes: cleanReleaseNotes(payload.body) });
+  }
+  if (payload.immutable !== true && !matchesPinnedLegacyRelease(payload, version)) {
+    throw new UpdateError(
+      'Новый GitHub Release не защищён от изменений. Включите immutable releases и опубликуйте версию заново.',
+      'mutable_release',
+    );
   }
   if (!Array.isArray(payload.assets)) {
     throw new UpdateError('В GitHub Release отсутствует список файлов.', 'assets_missing');
@@ -729,6 +787,18 @@ class HubUpdater {
         if (activeAfterLock > 0) {
           throw new UpdateError('Перед обновлением успела запуститься новая задача. Дождитесь её завершения.', 'active_runs');
         }
+        // Re-read the exact file after Vault lock, as close as possible to the
+        // native launch. This narrows the local same-user replacement window;
+        // the release digest remains the authoritative expected value.
+        let launchDigest;
+        try {
+          launchDigest = await sha256File(this.verifiedInstaller.path, this.verifiedInstaller.size);
+        } catch {
+          throw new UpdateError('Проверенный установщик пропал или повреждён. Скачайте его заново.', 'invalid_cached_installer');
+        }
+        if (launchDigest !== this.verifiedInstaller.sha256) {
+          throw new UpdateError('Проверенный установщик изменился перед запуском. Скачайте его заново.', 'cached_checksum_mismatch');
+        }
         if (this.platform === 'win32') {
           // NSIS may start replacing files as soon as it opens, so Windows
           // stops the core first. A failed OS launch restarts the old core.
@@ -807,6 +877,7 @@ class HubUpdater {
 module.exports = {
   CHECK_TIMEOUT_MS,
   HubUpdater,
+  LEGACY_PINNED_RELEASES,
   LATEST_RELEASE_URL,
   MAX_CHECKSUM_BYTES,
   MAX_INSTALLER_BYTES,

@@ -34,10 +34,14 @@ from .config import (
 )
 from .database import Database, utc_now
 from .github_install import GitHubPackage
-from .versions import compare_version_strings
+from .github_patches import release_asset_version_hint
+from .versions import compare_version_strings, parse_semantic_version
 
+_CORE_VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+_LEGACY_VERSION_PATH_RE = re.compile(
+    r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+)
 _ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$")
-_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
 _ENTRYPOINT_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*$"
 )
@@ -77,11 +81,19 @@ _ALLOWED_ACTION_RISKS = {
 }
 _ALLOWED_STATE_MODELS = {"stateless", "resumable", "externally_reconciled"}
 LEGACY_STRICT_CONTRACT_VERSION = "SH-SOFTWARE-0.6/2"
-STRICT_CONTRACT_VERSION = "SH-SOFTWARE-0.6/3"
+PREVIOUS_STRICT_CONTRACT_VERSION = "SH-SOFTWARE-0.6/3"
+STRICT_CONTRACT_VERSION = "SH-SOFTWARE-0.6/4"
 _STRICT_CONTRACT_VERSIONS = {
     LEGACY_STRICT_CONTRACT_VERSION,
+    PREVIOUS_STRICT_CONTRACT_VERSION,
     STRICT_CONTRACT_VERSION,
 }
+_MODERN_STRICT_CONTRACT_VERSIONS = {
+    PREVIOUS_STRICT_CONTRACT_VERSION,
+    STRICT_CONTRACT_VERSION,
+}
+_CATALOG_SECTIONS = ("general", "nft", "testnet")
+_CATALOG_SECTION_SET = set(_CATALOG_SECTIONS)
 _ACCOUNT_CONCURRENCY_OPTION = "account_concurrency"
 _ACCOUNT_CONCURRENCY_MAX = 20
 _BROWSER_ACCOUNT_CONCURRENCY_MAX = 5
@@ -160,6 +172,42 @@ _DENIED_SECRET_SUFFIXES = {
 
 class PluginError(ValueError):
     pass
+
+
+def catalog_sections(manifest: Any) -> list[str]:
+    """Resolve stable UI placement without rewriting the signed manifest.
+
+    Catalog metadata first appeared in the strict /4 contract.  Older
+    manifests remain installable: an actual testnet declaration is enough to
+    place them in Testnets, while every other legacy module stays in the
+    general library.  NFT placement is intentionally never guessed from an id,
+    title, host or action name.
+    """
+    if not isinstance(manifest, dict):
+        return ["general"]
+    catalog = manifest.get("catalog")
+    if isinstance(catalog, dict):
+        sections = catalog.get("sections")
+        if (
+            isinstance(sections, list)
+            and sections
+            and all(isinstance(section, str) for section in sections)
+            and len(sections) == len(set(sections))
+            and set(sections).issubset(_CATALOG_SECTION_SET)
+            and not ("general" in sections and len(sections) != 1)
+        ):
+            declared = set(sections)
+            return [section for section in _CATALOG_SECTIONS if section in declared]
+    permissions = manifest.get("permissions")
+    if isinstance(permissions, dict) and permissions.get("financial_risk") == "testnet":
+        return ["testnet"]
+    actions = manifest.get("actions")
+    if isinstance(actions, list) and any(
+        isinstance(action, dict) and action.get("risk") == "testnet_write"
+        for action in actions
+    ):
+        return ["testnet"]
+    return ["general"]
 
 
 def _reject_unknown(mapping: dict[str, Any], allowed: set[str], scope: str) -> None:
@@ -496,6 +544,7 @@ def _validate_account_concurrency_option(
     browser: bool,
     required: bool,
     minimum_hub: tuple[int, int, int],
+    contract_version: str | None,
 ) -> None:
     options = action.get("options", {})
     properties = options.get("properties", {}) if isinstance(options, dict) else {}
@@ -509,7 +558,7 @@ def _validate_account_concurrency_option(
     if field is None:
         if required:
             raise PluginError(
-                f"{STRICT_CONTRACT_VERSION} требует option account_concurrency "
+                f"{contract_version or STRICT_CONTRACT_VERSION} требует option account_concurrency "
                 "у каждого account-action"
             )
         return
@@ -852,20 +901,30 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
         raise PluginError("Версия схемы плагина не поддерживается")
     _reject_unknown(
         raw,
-        required | {"$schema", "contract_version", "author", "compatibility", "presentation", "ui"},
+        required
+        | {
+            "$schema",
+            "contract_version",
+            "author",
+            "compatibility",
+            "presentation",
+            "catalog",
+            "ui",
+        },
         "Манифест",
     )
     contract_version = raw.get("contract_version")
     if contract_version is not None and contract_version not in _STRICT_CONTRACT_VERSIONS:
         raise PluginError("Неизвестная contract_version плагина")
     strict_contract = contract_version in _STRICT_CONTRACT_VERSIONS
-    latest_contract = contract_version == STRICT_CONTRACT_VERSION
+    modern_contract = contract_version in _MODERN_STRICT_CONTRACT_VERSIONS
+    catalog_contract = contract_version == STRICT_CONTRACT_VERSION
     if strict_contract:
         strict_top_level = {"author", "compatibility", "presentation"}
         strict_missing = sorted(strict_top_level - raw.keys())
         if strict_missing:
             raise PluginError(
-                f"{STRICT_CONTRACT_VERSION} требует поля: {', '.join(strict_missing)}"
+                f"{contract_version} требует поля: {', '.join(strict_missing)}"
             )
     if "$schema" in raw and (
         not isinstance(raw["$schema"], str) or len(raw["$schema"]) > 500
@@ -875,7 +934,8 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
     if not isinstance(plugin_id, str) or len(plugin_id) > 96 or not _ID_RE.fullmatch(plugin_id):
         raise PluginError("Некорректный id плагина")
     version = raw["version"]
-    if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
+    parsed_version = parse_semantic_version(version)
+    if parsed_version is None or parsed_version.canonical != version:
         raise PluginError("version должен быть SemVer вида 1.2.3")
     if not isinstance(raw["name"], str) or not 1 <= len(raw["name"].strip()) <= 80:
         raise PluginError("Некорректное имя плагина")
@@ -891,6 +951,37 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
         or len(raw["author"]) > 120
     ):
         raise PluginError("Некорректный author плагина")
+
+    catalog_present = "catalog" in raw
+    catalog = raw.get("catalog")
+    if catalog_present and not catalog_contract:
+        raise PluginError(
+            f"catalog поддерживается только контрактом {STRICT_CONTRACT_VERSION}"
+        )
+    if catalog_contract and not catalog_present:
+        raise PluginError(f"{STRICT_CONTRACT_VERSION} требует поле catalog")
+    if catalog_present:
+        if not isinstance(catalog, dict):
+            raise PluginError("catalog должен быть объектом")
+        _reject_unknown(catalog, {"sections"}, "catalog")
+        if set(catalog) != {"sections"}:
+            raise PluginError("catalog требует sections")
+        sections = catalog["sections"]
+        if (
+            not isinstance(sections, list)
+            or not 1 <= len(sections) <= 2
+            or any(
+                not isinstance(section, str) or section not in _CATALOG_SECTION_SET
+                for section in sections
+            )
+        ):
+            raise PluginError(
+                "catalog.sections должен содержать 1..2 раздела: general, nft или testnet"
+            )
+        if len(sections) != len(set(sections)):
+            raise PluginError("catalog.sections содержит повторы")
+        if "general" in sections and len(sections) != 1:
+            raise PluginError("Раздел general нельзя сочетать с nft или testnet")
 
     presentation = raw.get("presentation")
     if presentation is not None:
@@ -934,9 +1025,15 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
     if not isinstance(hub_constraint, str) or not hub_constraint.startswith(">="):
         raise PluginError("Сейчас поддерживается compatibility.hub только в формате >=x.y.z")
     minimum = hub_constraint[2:]
-    if not _VERSION_RE.fullmatch(minimum) or _version_tuple(APP_VERSION) < _version_tuple(minimum):
+    if not _CORE_VERSION_RE.fullmatch(minimum) or _version_tuple(APP_VERSION) < _version_tuple(minimum):
         raise PluginError(f"Плагину требуется Soft Hub {hub_constraint}")
-    contract_minimum = (0, 6, 5) if latest_contract else (0, 6, 3)
+    contract_minimum = (
+        (0, 6, 15)
+        if catalog_contract
+        else (0, 6, 5)
+        if modern_contract
+        else (0, 6, 3)
+    )
     if strict_contract and _version_tuple(minimum) < contract_minimum:
         raise PluginError(
             f"{contract_version} требует compatibility.hub "
@@ -957,7 +1054,7 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
         raise PluginError("compatibility.os содержит повторы")
     if strict_contract and set(compatibility) != {"hub", "python", "os"}:
         raise PluginError(
-            f"{STRICT_CONTRACT_VERSION} требует compatibility.hub, python и os"
+            f"{contract_version} требует compatibility.hub, python и os"
         )
 
     runtime = raw["runtime"]
@@ -990,7 +1087,7 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
         raise PluginError("runtime.safe_stop должен быть boolean")
     if strict_contract and not {"safe_stop", "heartbeat_seconds"}.issubset(runtime):
         raise PluginError(
-            f"{STRICT_CONTRACT_VERSION} требует runtime.safe_stop и heartbeat_seconds"
+            f"{contract_version} требует runtime.safe_stop и heartbeat_seconds"
         )
     if "requirements" in runtime:
         requirements = runtime["requirements"]
@@ -1129,7 +1226,7 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
         if "permissions" not in action:
             if strict_contract:
                 raise PluginError(
-                    f"{STRICT_CONTRACT_VERSION} требует action.permissions у каждого action"
+                    f"{contract_version} требует action.permissions у каждого action"
                 )
             action_secret_sets.append(None)
             effective_action_secrets = set(secrets)
@@ -1156,7 +1253,7 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
         resources = action.get("resources")
         if strict_contract and resources is None:
             raise PluginError(
-                f"{STRICT_CONTRACT_VERSION} требует action.resources у каждого action"
+                f"{contract_version} требует action.resources у каждого action"
             )
         referral_action_permissions = {
             "referral_code",
@@ -1221,7 +1318,7 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
             raise PluginError("Remote/local $ref в action.options запрещены")
         if strict_contract and "options" not in action:
             raise PluginError(
-                f"{STRICT_CONTRACT_VERSION} требует action.options у каждого action"
+                f"{contract_version} требует action.options у каждого action"
             )
         _validate_options_schema(
             options,
@@ -1231,20 +1328,21 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
         _validate_account_concurrency_option(
             action,
             browser=permissions.get("browser") is True,
-            required=latest_contract and action["account_mode"] == "one_or_more",
+            required=modern_contract and action["account_mode"] == "one_or_more",
             minimum_hub=_version_tuple(minimum),
+            contract_version=contract_version,
         )
-        if latest_contract and _manual_referral_code_options(action):
+        if modern_contract and _manual_referral_code_options(action):
             raise PluginError(
-                "SH-SOFTWARE-0.6/3 не принимает ручной referral/invite code через options"
+                f"{contract_version} не принимает ручной referral/invite code через options"
             )
         parent_secret_set = _validate_referral_contract(
             action,
             minimum_hub=_version_tuple(minimum),
         )
-        if latest_contract and _LEGACY_REFERRAL_SECRET_NAMES & effective_action_secrets:
+        if modern_contract and _LEGACY_REFERRAL_SECRET_NAMES & effective_action_secrets:
             raise PluginError(
-                "SH-SOFTWARE-0.6/3 удалил referral_code/referrer_code: "
+                f"{contract_version} удалил referral_code/referrer_code: "
                 "используйте action.referral project_runtime"
             )
         if action_secret_sets[-1] is not None:
@@ -1264,9 +1362,9 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
                 "Объединение action.permissions.secrets должно совпадать с permissions.secrets"
             )
 
-    if latest_contract and _LEGACY_REFERRAL_SECRET_NAMES & set(secrets):
+    if modern_contract and _LEGACY_REFERRAL_SECRET_NAMES & set(secrets):
         raise PluginError(
-            "SH-SOFTWARE-0.6/3 не поддерживает legacy referral secret grants"
+            f"{contract_version} не поддерживает legacy referral secret grants"
         )
 
     if {"referral_code", "referrer_code"} & set(secrets) and _version_tuple(
@@ -1286,6 +1384,19 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
     )
     if permissions["financial_risk"] != expected_financial_risk:
         raise PluginError("permissions.financial_risk не соответствует максимальному риску actions")
+    if catalog_contract:
+        declared_sections = set(catalog["sections"])
+        if "testnet_write" in action_risks and "testnet" not in declared_sections:
+            raise PluginError(
+                "testnet_write требует catalog.sections с разделом testnet"
+            )
+        if "testnet" in declared_sections and (
+            "mainnet_write" in action_risks
+            or permissions["financial_risk"] == "mainnet"
+        ):
+            raise PluginError(
+                "Раздел testnet нельзя использовать для mainnet-действий"
+            )
     if action_risks & {"testnet_write", "mainnet_write"} and not chains:
         raise PluginError("Chain write-действию нужен минимум один permissions.chains")
     if any(
@@ -1516,6 +1627,14 @@ class PluginManager:
             manifest = inspection["manifest"]
             plugin_id = manifest["id"]
             version = manifest["version"]
+            source_version, _source_version_reason = release_asset_version_hint(
+                source.release,
+                source.filename,
+            )
+            if source_version != version:
+                raise PluginError(
+                    "Версия manifest не совпадает с GitHub release tag и именем asset"
+                )
             owner = source.owner.casefold()
             repository = source.repository.casefold()
 
@@ -1543,22 +1662,19 @@ class PluginManager:
                 )
 
             current = self.database.one(
-                "SELECT version FROM modules WHERE id=? AND health!='removed'",
+                "SELECT version,health FROM modules WHERE id=?",
                 (plugin_id,),
             )
-            if current:
-                precedence = (
-                    0
-                    if version == current["version"]
-                    else compare_version_strings(version, current["version"])
-                )
+            version_floor = self._known_version_floor(plugin_id)
+            if version_floor is not None:
+                precedence = compare_version_strings(version, version_floor)
                 if precedence is None:
                     raise PluginError(
                         "Версии GitHub-пакета и установленного софта нельзя безопасно сравнить"
                     )
                 if precedence < 0:
                     raise PluginError(
-                        f"Установлена более новая версия {current['version']}; "
+                        f"Hub уже знает более новую версию {version_floor}; "
                         f"понижение до {version} остановлено"
                     )
 
@@ -1610,18 +1726,19 @@ class PluginManager:
         plugin_id = manifest["id"]
         version = manifest["version"]
         current = self.database.one(
-            "SELECT version FROM modules WHERE id=? AND health!='removed'",
+            "SELECT version,health FROM modules WHERE id=?",
             (plugin_id,),
         )
-        if current and version != current["version"]:
-            precedence = compare_version_strings(version, current["version"])
+        version_floor = self._known_version_floor(plugin_id)
+        if version_floor is not None:
+            precedence = compare_version_strings(version, version_floor)
             if precedence is None:
                 raise PluginError(
                     "Версии пакета и установленного софта нельзя безопасно сравнить"
                 )
             if precedence < 0:
                 raise PluginError(
-                    f"Установлена более новая версия {current['version']}; "
+                    f"Hub уже знает более новую версию {version_floor}; "
                     f"понижение до {version} остановлено"
                 )
         existing_version = self.database.one(
@@ -1630,6 +1747,11 @@ class PluginManager:
         )
         if existing_version:
             raise PluginError(f"Версия {version} уже установлена")
+        if version_floor is not None and version == version_floor:
+            raise PluginError(
+                f"Версия {version} уже была известна Hub и не может быть активирована повторно; "
+                "выпустите новую SemVer-версию"
+            )
 
         stage = self.paths.staging / str(uuid.uuid4())
         target_parent = self.paths.plugins / plugin_id
@@ -1737,23 +1859,51 @@ class PluginManager:
         source: GitHubPackage,
         installed_at: str,
     ) -> None:
+        normalized = {
+            "owner": source.owner.casefold(),
+            "repository": source.repository.casefold(),
+            "release_tag": source.release,
+            "asset_name": source.filename,
+            "asset_url": source.download_url,
+            "archive_sha256": archive_sha256,
+        }
+        existing = connection.execute(
+            "SELECT owner,repository,release_tag,asset_name,asset_url,archive_sha256 "
+            "FROM github_module_sources WHERE module_id=? AND version=?",
+            (plugin_id, version),
+        ).fetchone()
+        if existing is not None:
+            stored = dict(existing)
+            if (
+                stored["owner"].casefold() != normalized["owner"]
+                or stored["repository"].casefold() != normalized["repository"]
+                or any(
+                    stored[key] != normalized[key]
+                    for key in (
+                        "release_tag",
+                        "asset_name",
+                        "asset_url",
+                        "archive_sha256",
+                    )
+                )
+            ):
+                raise PluginError(
+                    "GitHub source identity этой версии уже зафиксирована и не может быть изменена"
+                )
+            return
         connection.execute(
             "INSERT INTO github_module_sources("
             "module_id,version,owner,repository,release_tag,asset_name,asset_url,"
-            "archive_sha256,installed_at) VALUES (?,?,?,?,?,?,?,?,?) "
-            "ON CONFLICT(module_id,version) DO UPDATE SET "
-            "owner=excluded.owner,repository=excluded.repository,"
-            "release_tag=excluded.release_tag,asset_name=excluded.asset_name,"
-            "asset_url=excluded.asset_url,archive_sha256=excluded.archive_sha256",
+            "archive_sha256,installed_at) VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 plugin_id,
                 version,
-                source.owner.casefold(),
-                source.repository.casefold(),
-                source.release,
-                source.filename,
-                source.download_url,
-                archive_sha256,
+                normalized["owner"],
+                normalized["repository"],
+                normalized["release_tag"],
+                normalized["asset_name"],
+                normalized["asset_url"],
+                normalized["archive_sha256"],
                 installed_at,
             ),
         )
@@ -1792,13 +1942,57 @@ class PluginManager:
         """Return the core-owned repository bindings used by Patch Radar."""
 
         with self._mutation_lock:
-            return self.database.all(
+            rows = self.database.all(
                 "SELECT s.module_id,s.version,s.owner,s.repository,s.release_tag,"
-                "s.asset_name,s.asset_url,s.archive_sha256,m.version AS active_version "
+                "s.asset_name,s.asset_url,s.archive_sha256,m.version AS module_version,"
+                "m.health AS module_health "
                 "FROM github_module_sources AS s "
-                "JOIN modules AS m ON m.id=s.module_id AND m.health!='removed' "
+                "JOIN modules AS m ON m.id=s.module_id "
                 "ORDER BY s.owner,s.repository,s.module_id,s.installed_at DESC"
             )
+            floors: dict[str, str] = {}
+            invalid_floors: set[str] = set()
+            projected: list[dict[str, Any]] = []
+            for row in rows:
+                module_id = str(row["module_id"])
+                if module_id not in floors and module_id not in invalid_floors:
+                    try:
+                        floor = self._known_version_floor(module_id)
+                    except PluginError:
+                        invalid_floors.add(module_id)
+                    else:
+                        if floor is None:
+                            invalid_floors.add(module_id)
+                        else:
+                            floors[module_id] = floor
+                removed = row.pop("module_health") == "removed"
+                module_version = str(row.pop("module_version"))
+                row["active_version"] = None if removed else module_version
+                row["version_floor"] = floors.get(module_id)
+                row["version_history_valid"] = module_id not in invalid_floors
+                row["module_removed"] = removed
+                projected.append(row)
+            return projected
+
+    def _known_version_floor(self, plugin_id: str) -> str | None:
+        """Return the highest canonical SemVer ever admitted for one module id."""
+
+        rows = self.database.all(
+            "SELECT version FROM module_versions WHERE module_id=? "
+            "UNION SELECT version FROM modules WHERE id=?",
+            (plugin_id, plugin_id),
+        )
+        floor: str | None = None
+        for row in rows:
+            version = row.get("version")
+            parsed = parse_semantic_version(version)
+            if parsed is None or parsed.canonical != version:
+                raise PluginError(
+                    "История версий софта повреждена; безопасное обновление остановлено"
+                )
+            if floor is None or compare_version_strings(version, floor) == 1:
+                floor = version
+        return floor
 
     def _health(self, manifest: dict[str, Any], path: Path) -> str:
         requirements = manifest["runtime"].get("requirements")
@@ -1976,7 +2170,7 @@ class PluginManager:
         return self.get(plugin_id) or {}
 
     def uninstall(self, plugin_id: str) -> dict[str, Any]:
-        """Remove Hub-owned code while preserving historical run/result foreign keys."""
+        """Remove Hub-owned code while preserving forward-only identity tombstones."""
         if not isinstance(plugin_id, str) or not _ID_RE.fullmatch(plugin_id):
             raise PluginError("Плагин не найден")
         with self._mutation_lock:
@@ -2017,7 +2211,7 @@ class PluginManager:
                         os.replace(plugin_root, quarantine)
 
                     connection.execute(
-                        "DELETE FROM module_versions WHERE module_id=?",
+                        "UPDATE module_versions SET active=0 WHERE module_id=?",
                         (plugin_id,),
                     )
                     connection.execute(
@@ -2068,7 +2262,10 @@ class PluginManager:
             (str(row["version"]), row["path"]) for row in versions
         ]
         for version, stored_path in candidates:
-            if not _VERSION_RE.fullmatch(version) or not isinstance(stored_path, str):
+            if (
+                not _LEGACY_VERSION_PATH_RE.fullmatch(version)
+                or not isinstance(stored_path, str)
+            ):
                 raise PluginError("Пути плагина повреждены; удаление остановлено")
             expected = plugin_root / version
             if expected.is_symlink() or Path(stored_path).resolve() != expected.resolve():

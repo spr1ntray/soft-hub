@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -15,16 +16,16 @@ class BuildPluginSecurityTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.source = self.root / "plugin"
-        self.source.mkdir()
+        project_root = Path(__file__).resolve().parents[1]
+        shutil.copytree(project_root / "examples" / "hello-soft", self.source)
+        manifest_path = self.source / "hub.plugin.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["id"] = "build.security"
+        manifest["name"] = "Build Security"
+        manifest["presentation"]["display_name"] = "Build Security"
+        manifest["compatibility"]["os"] = ["darwin", "win32", "linux"]
         (self.source / "hub.plugin.json").write_text(
-            json.dumps(plugin_manifest(plugin_id="build.security")),
-            encoding="utf-8",
-        )
-        plugin_package = self.source / "plugin"
-        plugin_package.mkdir()
-        (plugin_package / "__init__.py").write_text("", encoding="utf-8")
-        (plugin_package / "main.py").write_text(
-            "def run(context):\n    return {'ok': True}\n",
+            json.dumps(manifest),
             encoding="utf-8",
         )
 
@@ -84,22 +85,58 @@ class BuildPluginSecurityTests(unittest.TestCase):
 
         with zipfile.ZipFile(output) as archive:
             manifest = json.loads(archive.read("hub.plugin.json"))
-            self.assertEqual(manifest["contract_version"], "SH-SOFTWARE-0.6/3")
+            self.assertEqual(manifest["contract_version"], "SH-SOFTWARE-0.6/4")
+            self.assertEqual(manifest["catalog"]["sections"], ["general"])
             self.assertIn("assets/icon.png", archive.namelist())
             self.assertIn("assets/cover.png", archive.namelist())
 
+    def test_rejects_legacy_manifest_for_a_new_author_build(self) -> None:
+        (self.source / "hub.plugin.json").write_text(
+            json.dumps(plugin_manifest(plugin_id="build.legacy")),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "только новые пакеты контракта"):
+            build(self.source, self.root / "legacy.softhub.zip")
+
+    def test_builder_rejects_noncanonical_semver(self) -> None:
+        manifest_path = self.source / "hub.plugin.json"
+        baseline = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for index, version in enumerate(
+            (
+                "01.0.0",
+                "1.0.0-01",
+                "1.0.0-alpha..1",
+                "1.0.0+rebuilt",
+                "1.0.0-" + "a" * 175,
+            )
+        ):
+            with self.subTest(version=version):
+                manifest = dict(baseline)
+                manifest["version"] = version
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "SemVer"):
+                    build(self.source, self.root / f"invalid-version-{index}.softhub.zip")
+
+        valid = dict(baseline)
+        valid["version"] = "1.2.0-rc.1"
+        manifest_path.write_text(json.dumps(valid), encoding="utf-8")
+        output = build(self.source, self.root / "valid-prerelease.softhub.zip")
+        self.assertTrue(output.is_file())
+
     def test_builder_runs_the_same_final_archive_inspection_as_installer(self) -> None:
-        manifest = plugin_manifest(plugin_id="build.presentation")
+        manifest_path = self.source / "hub.plugin.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["id"] = "build.presentation"
         manifest["presentation"] = {
             "display_name": "Broken image",
             "description": "The manifest is valid, but the bitmap payload is not.",
             "assets": {"icon": "assets/icon.png", "image": "assets/cover.png"},
         }
-        (self.source / "hub.plugin.json").write_text(
+        manifest_path.write_text(
             json.dumps(manifest), encoding="utf-8"
         )
         assets = self.source / "assets"
-        assets.mkdir()
         (assets / "icon.png").write_bytes(b"not-a-real-png")
         (assets / "cover.png").write_bytes(b"not-a-real-png")
 

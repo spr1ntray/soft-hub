@@ -51,6 +51,8 @@
       <symbol id="icon-module-3" viewBox="0 0 24 24"><rect x="4.5" y="4.5" width="6" height="6" rx="1.5"/><rect x="13.5" y="4.5" width="6" height="6" rx="1.5"/><rect x="4.5" y="13.5" width="6" height="6" rx="1.5"/><path d="M16.5 13.5v6M13.5 16.5h6"/></symbol>
       <symbol id="icon-module-4" viewBox="0 0 24 24"><circle cx="5" cy="7" r="1.5"/><circle cx="19" cy="17" r="1.5"/><path d="M6.5 7h3.3a3 3 0 0 1 3 3v4a3 3 0 0 0 3 3h1.7M8.5 17H7a2 2 0 0 1-2-2v-3"/></symbol>
       <symbol id="icon-module-5" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="m15.8 8.2-2.1 5.5-5.5 2.1 2.1-5.5Z"/><circle cx="12" cy="12" r=".8"/></symbol>
+      <symbol id="icon-nft" viewBox="0 0 24 24"><path d="m5 7.25 7-4 7 4v9.5l-7 4-7-4Z"/><path d="m5.4 7.5 6.6 3.75 6.6-3.75M12 11.25v9.1"/><path d="m8.3 5.35 7.05 4.05"/></symbol>
+      <symbol id="icon-testnet" viewBox="0 0 24 24"><circle cx="5" cy="15" r="2"/><circle cx="12" cy="7" r="2"/><circle cx="19" cy="13" r="2"/><path d="m6.35 13.55 4.3-5.1M13.75 8.1l3.5 3.8M7 15h5a3 3 0 0 0 3-3"/></symbol>
     </svg>
     <a class="skip-link" href="#main-workspace">Перейти к содержимому</a>
     <div class="shell">
@@ -77,12 +79,20 @@
             <span class="nav-index">04</span><span>Результаты</span>
           </button>
 
+          <p class="nav-label nav-label--second">Направления</p>
+          <button class="nav-item" type="button" data-view="nft" aria-label="NFT">
+            <span class="nav-index">05</span><span>NFT</span><i data-nav-count="nft"></i>
+          </button>
+          <button class="nav-item" type="button" data-view="testnets" aria-label="Тестнеты">
+            <span class="nav-index">06</span><span>Тестнеты</span><i data-nav-count="testnets"></i>
+          </button>
+
           <p class="nav-label nav-label--second">Система</p>
           <button class="nav-item" type="button" data-view="patches" aria-label="Патчи">
-            <span class="nav-index">05</span><span>Патчи</span><i data-nav-count="patches"></i>
+            <span class="nav-index">07</span><span>Патчи</span><i data-nav-count="patches"></i>
           </button>
           <button class="nav-item" type="button" data-view="settings" aria-label="Настройки">
-            <span class="nav-index">06</span><span>Настройки</span><i id="nav-core-update" aria-hidden="true"></i>
+            <span class="nav-index">08</span><span>Настройки</span><i id="nav-core-update" aria-hidden="true"></i>
           </button>
         </nav>
 
@@ -243,6 +253,7 @@
             <div class="section-intro">
               <div><p class="section-kicker">ИТОГИ</p><h2>Результаты</h2><span>Здесь можно нормально разобрать парсинг: выбрать запуск, отфильтровать кошельки, посмотреть все показатели и скачать таблицу.</span></div>
             </div>
+            <div id="result-catalog-filter" class="result-catalog-filter" role="status" aria-live="polite" hidden><span><svg class="hub-icon" aria-hidden="true"><use href="#icon-search"></use></svg><strong id="result-catalog-filter-copy">Показаны результаты раздела</strong></span><button id="result-catalog-filter-clear" class="text-button" type="button">Показать все</button></div>
             <article id="result-report-workbench" class="result-report-workbench panel border-glow" aria-labelledby="result-report-title">
               <header class="result-report-head">
                 <span class="result-report-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-search"></use></svg></span>
@@ -268,6 +279,116 @@
             </article>
             <div class="result-history-heading"><div><p class="section-kicker">ИСТОРИЯ</p><h3>Все результаты по софтам</h3></div><span>Обычные итоги никуда не делись — они собраны ниже по каждому софту.</span></div>
             <div id="results-list" class="results-list"></div>
+          </section>
+
+          <section id="view-nft" class="view catalog-workspace" data-catalog-workspace="nft" aria-labelledby="page-title">
+            <article class="catalog-hero catalog-hero--nft">
+              <div class="catalog-hero-copy">
+                <p>NFT · WL / MINT / MARKET</p>
+                <h2>NFT: от WL до результата</h2>
+                <span>Вайтлисты, проверки, минты и итог перед дальнейшей работой с коллекцией.</span>
+              </div>
+              <svg class="catalog-hero-art catalog-hero-art--nft catalog-art--certificate" viewBox="0 0 190 112" aria-hidden="true" focusable="false">
+                <rect class="catalog-art-plate" x="3" y="3" width="184" height="106" rx="16" />
+                <rect class="catalog-art-token-card" x="16" y="15" width="78" height="82" rx="12" />
+                <path class="catalog-art-token" d="M55 27 75 38v23L55 72 35 61V38Zm-20 11 20 11 20-11M55 49v23" />
+                <text class="catalog-art-micro" x="27" y="87">1 / 1</text>
+                <text class="catalog-art-word" x="111" y="29">NFT</text>
+                <text class="catalog-art-caption" x="111" y="45">DIGITAL ASSET</text>
+                <path class="catalog-art-rule" d="M111 55h60" />
+                <text class="catalog-art-number" x="111" y="75">#0042</text>
+                <path class="catalog-art-chain" d="M112 91c0-4 3-7 7-7h8c4 0 7 3 7 7s-3 7-7 7h-4M141 84h-4c-4 0-7 3-7 7s3 7 7 7h8c4 0 7-3 7-7" />
+                <circle class="catalog-art-accent-dot" cx="169" cy="91" r="3" />
+              </svg>
+              <div class="catalog-metrics" data-catalog-metrics="nft" role="region" tabindex="0" aria-label="Сводка NFT"></div>
+            </article>
+
+            <section class="catalog-software-section" aria-labelledby="nft-software-title">
+              <header class="catalog-section-head">
+                <div><p class="section-kicker">NFT-СОФТЫ</p><h2 id="nft-software-title">Проекты и действия</h2><span>Выберите один софт или соберите пачку. Здесь собрано всё, что относится к NFT.</span></div>
+                <label class="catalog-search"><svg class="hub-icon" aria-hidden="true"><use href="#icon-search"></use></svg><span class="sr-only">Найти NFT-софт</span><input type="search" name="nft-software-search" data-catalog-search="nft" placeholder="Найти NFT-софт…" autocomplete="off" spellcheck="false" /></label>
+              </header>
+              <div class="catalog-batch-bar" data-catalog-batch-bar="nft" aria-live="polite">
+                <span class="batch-bar-icon" aria-hidden="true"><svg class="hub-icon"><use href="#icon-batch"></use></svg></span>
+                <div><strong data-catalog-batch-title="nft">Пакетный запуск NFT</strong><small data-catalog-batch-copy="nft">Отметьте нужные карточки — запустим только NFT-софты.</small></div>
+                <button class="text-button" type="button" data-catalog-select-ready="nft">Выбрать готовые</button>
+                <button class="text-button" type="button" data-catalog-clear-selection="nft" hidden>Снять выбор</button>
+                <button class="button button--acid" type="button" data-catalog-open-batch="nft" disabled><svg class="hub-icon" aria-hidden="true"><use href="#icon-play"></use></svg><span>Запустить выбранные</span></button>
+              </div>
+              <div class="software-grid catalog-software-grid animated-list" data-catalog-software-grid="nft"></div>
+            </section>
+
+            <div class="catalog-activity-grid">
+              <article class="panel catalog-runs-panel">
+                <div class="panel-head"><div><p>ЗАПУСКИ</p><h3>Что происходит сейчас</h3></div><button class="text-button" type="button" data-activity-open="active" aria-controls="activity-panel" aria-expanded="false">Все операции →</button></div>
+                <div class="run-list compact-list" data-catalog-runs="nft"></div>
+              </article>
+              <article class="panel catalog-results-panel">
+                <div class="panel-head"><div><p>ИТОГИ</p><h3>Последние результаты</h3></div><button class="text-button" type="button" data-catalog-open-results="nft">Открыть результаты →</button></div>
+                <div class="catalog-result-list" data-catalog-results="nft"></div>
+              </article>
+              <article class="panel catalog-reports-panel">
+                <div class="panel-head"><div><p>ПАРСИНГ</p><h3>Отчёты по кошелькам</h3></div><button class="text-button" type="button" data-catalog-refresh-reports="nft">Обновить</button></div>
+                <div class="catalog-report-list" data-catalog-reports="nft" aria-live="polite"></div>
+              </article>
+            </div>
+          </section>
+
+          <section id="view-testnets" class="view catalog-workspace" data-catalog-workspace="testnet" aria-labelledby="page-title">
+            <article class="catalog-hero catalog-hero--testnet">
+              <div class="catalog-hero-copy">
+                <p>TESTNET · RUN / TRACK / PARSE</p>
+                <h2>Тестнеты: запуск и контроль</h2>
+                <span>Подготовка, массовые запуски, состояние аккаунтов и статистика по тестовым сетям.</span>
+              </div>
+              <svg class="catalog-hero-art catalog-hero-art--testnet catalog-art--sandbox" viewBox="0 0 190 112" aria-hidden="true" focusable="false">
+                <rect class="catalog-art-plate" x="3" y="3" width="184" height="106" rx="16" />
+                <text class="catalog-art-word" x="17" y="27">TESTNET</text>
+                <rect class="catalog-art-chip" x="139" y="14" width="34" height="18" rx="9" />
+                <text class="catalog-art-chip-label" x="148" y="26">RPC</text>
+                <rect class="catalog-art-sandbox-frame" x="15" y="39" width="160" height="57" rx="12" />
+                <path class="catalog-art-wire" d="m57 72 22-10M111 62l22 10" />
+                <circle class="catalog-art-wire-node" cx="68" cy="67" r="2.5" />
+                <circle class="catalog-art-wire-node" cx="122" cy="67" r="2.5" />
+                <rect class="catalog-art-block" x="24" y="59" width="34" height="26" rx="6" />
+                <rect class="catalog-art-block catalog-art-block--active" x="78" y="47" width="34" height="26" rx="6" />
+                <rect class="catalog-art-block" x="132" y="59" width="34" height="26" rx="6" />
+                <text class="catalog-art-block-label" x="34" y="76">#01</text>
+                <text class="catalog-art-block-label" x="88" y="64">TX</text>
+                <text class="catalog-art-block-label" x="142" y="76">#02</text>
+              </svg>
+              <div class="catalog-metrics" data-catalog-metrics="testnet" role="region" tabindex="0" aria-label="Сводка тестнетов"></div>
+            </article>
+
+            <section class="catalog-software-section" aria-labelledby="testnet-software-title">
+              <header class="catalog-section-head">
+                <div><p class="section-kicker">ТЕСТНЕТ-СОФТЫ</p><h2 id="testnet-software-title">Сети и проекты</h2><span>Запускайте один проект или собирайте отдельную пачку только из тестнет-софтов.</span></div>
+                <label class="catalog-search"><svg class="hub-icon" aria-hidden="true"><use href="#icon-search"></use></svg><span class="sr-only">Найти тестнет-софт</span><input type="search" name="testnet-software-search" data-catalog-search="testnet" placeholder="Найти тестнет-софт…" autocomplete="off" spellcheck="false" /></label>
+              </header>
+              <div class="catalog-batch-bar" data-catalog-batch-bar="testnet" aria-live="polite">
+                <span class="batch-bar-icon" aria-hidden="true"><svg class="hub-icon"><use href="#icon-batch"></use></svg></span>
+                <div><strong data-catalog-batch-title="testnet">Пакетный запуск тестнетов</strong><small data-catalog-batch-copy="testnet">Отметьте нужные карточки — запустим выбранные тестнет-софты.</small></div>
+                <button class="text-button" type="button" data-catalog-select-ready="testnet">Выбрать готовые</button>
+                <button class="text-button" type="button" data-catalog-clear-selection="testnet" hidden>Снять выбор</button>
+                <button class="button button--acid" type="button" data-catalog-open-batch="testnet" disabled><svg class="hub-icon" aria-hidden="true"><use href="#icon-play"></use></svg><span>Запустить выбранные</span></button>
+              </div>
+              <div class="software-grid catalog-software-grid animated-list" data-catalog-software-grid="testnet"></div>
+            </section>
+
+            <div class="catalog-activity-grid">
+              <article class="panel catalog-runs-panel">
+                <div class="panel-head"><div><p>ЗАПУСКИ</p><h3>Что происходит сейчас</h3></div><button class="text-button" type="button" data-activity-open="active" aria-controls="activity-panel" aria-expanded="false">Все операции →</button></div>
+                <div class="run-list compact-list" data-catalog-runs="testnet"></div>
+              </article>
+              <article class="panel catalog-results-panel">
+                <div class="panel-head"><div><p>ИТОГИ</p><h3>Последние результаты</h3></div><button class="text-button" type="button" data-catalog-open-results="testnet">Открыть результаты →</button></div>
+                <div class="catalog-result-list" data-catalog-results="testnet"></div>
+              </article>
+              <article class="panel catalog-reports-panel">
+                <div class="panel-head"><div><p>ПАРСИНГ</p><h3>Отчёты по кошелькам</h3></div><button class="text-button" type="button" data-catalog-refresh-reports="testnet">Обновить</button></div>
+                <div class="catalog-report-list" data-catalog-reports="testnet" aria-live="polite"></div>
+              </article>
+            </div>
           </section>
 
           <section id="view-patches" class="view">

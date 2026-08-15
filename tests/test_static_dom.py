@@ -317,6 +317,81 @@ class StaticDOMTests(unittest.TestCase):
             self.assertIn(hook, self.html)
             self.assertIn(f".{hook}", self.css)
 
+    def test_update_badges_and_catalog_searches_keep_their_alignment_contract(self) -> None:
+        by_catalog = {
+            str(attrs["data-catalog-search"]): attrs
+            for attrs in self.dom.find("input")
+            if attrs.get("data-catalog-search")
+        }
+        self.assertEqual(set(by_catalog), {"nft", "testnet"})
+        for section, attrs in by_catalog.items():
+            self.assertEqual(attrs.get("type"), "search")
+            self.assertEqual(attrs.get("autocomplete"), "off")
+            self.assertEqual(attrs.get("spellcheck"), "false")
+            self.assertEqual(attrs.get("name"), f"{section}-software-search")
+            self.assertTrue(str(attrs.get("placeholder", "")).endswith("…"))
+
+        state_rule = re.search(
+            r"\.setting-update-state\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        search_rule = re.search(
+            r"\.catalog-search\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        nav_badge_rule = re.search(
+            r"\.nav-item > i:not\(:empty\)\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(state_rule)
+        self.assertIsNotNone(search_rule)
+        self.assertIsNotNone(nav_badge_rule)
+        for declaration in (
+            "display: inline-flex",
+            "align-items: center",
+            "justify-content: center",
+            "justify-self: end",
+            "line-height: 1",
+        ):
+            self.assertIn(declaration, state_rule.group("body"))
+        for declaration in (
+            "min-height: 44px",
+            "grid-template-columns: 18px minmax(0, 1fr)",
+            "align-items: center",
+            "max-width: 310px",
+        ):
+            self.assertIn(declaration, search_rule.group("body"))
+        for declaration in (
+            "display: inline-flex",
+            "min-height: 20px",
+            "align-items: center",
+            "line-height: 1",
+        ):
+            self.assertIn(declaration, nav_badge_rule.group("body"))
+        self.assertIn(
+            '.nav-item[data-view="settings"][data-update-available="true"]::after { display: block; }',
+            self.css,
+        )
+        self.assertIn(".catalog-search:has(input:focus-visible)", self.css)
+        self.assertIn(".patch-feed-card-head {", self.css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto", self.css)
+        discovery_rule = re.search(
+            r"\.discovery-state\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(discovery_rule)
+        for declaration in (
+            "display: inline-flex",
+            "min-height: 24px",
+            "align-items: center",
+            "line-height: 1",
+        ):
+            self.assertIn(declaration, discovery_rule.group("body"))
+
     def test_local_patch_picker_accepts_zip_names_and_leaves_content_validation_to_core(self) -> None:
         helper_source = self.javascript[
             self.javascript.index("function isLocalPluginArchiveName("):
@@ -1121,6 +1196,100 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("softwareActions.dataset.tooltipsDismissed = 'true'", self.javascript)
         self.assertIn("delete softwareActions.dataset.tooltipsDismissed", self.javascript)
 
+    def test_nft_and_testnet_workspaces_are_scoped_views_over_shared_data(self) -> None:
+        navigation = {
+            str(attrs["data-view"]): attrs
+            for attrs in self.dom.find("button")
+            if attrs.get("data-view")
+        }
+        self.assertEqual(navigation["nft"].get("aria-label"), "NFT")
+        self.assertEqual(navigation["testnets"].get("aria-label"), "Тестнеты")
+
+        for view, section in (("nft", "nft"), ("testnets", "testnet")):
+            workspace = self.dom.find(
+                "section",
+                id=f"view-{view}",
+                **{"data-catalog-workspace": section},
+            )
+            self.assertEqual(len(workspace), 1)
+            self.assertEqual(
+                len(self.dom.find("div", **{"data-catalog-software-grid": section})),
+                1,
+            )
+            self.assertEqual(
+                len(self.dom.find("div", **{"data-catalog-runs": section})),
+                1,
+            )
+            self.assertEqual(
+                len(self.dom.find("div", **{"data-catalog-results": section})),
+                1,
+            )
+            self.assertEqual(
+                len(self.dom.find("div", **{"data-catalog-reports": section})),
+                1,
+            )
+
+        for contract in (
+            "manifest.catalog?.sections || manifest.catalog_sections",
+            "module?.catalog_sections",
+            "record?.catalog_sections",
+            "function renderCatalogWorkspace(section)",
+            "function beginCatalogBatchSelection(section)",
+            "function openCatalogBatch(section)",
+            "function setResultCatalogFilter(section = 'all')",
+            "state.data.runs || []",
+            "state.data.results || []",
+            "state.resultReports.filter",
+            "data-batch-scope=\"${escapeHtml(scope)}\"",
+        ):
+            self.assertIn(contract, self.javascript)
+
+        self.assertIn("showCatalogChips: true", self.javascript)
+        self.assertIn("kind === 'locked'", self.javascript)
+        self.assertIn("data-catalog-open-patches", self.javascript)
+        self.assertIn(".catalog-hero {", self.css)
+        self.assertIn(".catalog-workspace[data-catalog-workspace=\"testnet\"]", self.css)
+        self.assertIn(".catalog-section-chip[data-catalog-section=\"nft\"]", self.css)
+        self.assertIn("overflow-x: auto", self.css)
+        self.assertIn("NFT: от WL до результата", self.html)
+        self.assertIn("Тестнеты: запуск и контроль", self.html)
+        for art_class in (
+            "catalog-hero-art catalog-hero-art--nft catalog-art--certificate",
+            "catalog-hero-art catalog-hero-art--testnet catalog-art--sandbox",
+        ):
+            art = self.dom.find("svg", **{"class": art_class})
+            self.assertEqual(len(art), 1)
+            self.assertEqual(art[0].get("aria-hidden"), "true")
+            self.assertEqual(art[0].get("focusable"), "false")
+        self.assertEqual(len(self.dom.find("div", **{"class": "catalog-route"})), 0)
+        for removed_step in (
+            "<strong>Заполнить</strong>",
+            "<strong>Заминтить</strong>",
+            "<strong>Подготовить</strong>",
+            "<strong>Проследить</strong>",
+        ):
+            self.assertNotIn(removed_step, self.html)
+        for visual_contract in (
+            "catalog-art-token-card",
+            "catalog-art-chain",
+            "DIGITAL ASSET",
+            "catalog-art-sandbox-frame",
+            "catalog-art-block--active",
+            ">TESTNET<",
+        ):
+            self.assertIn(visual_contract, self.html)
+        hero_css = self.css[self.css.index(".catalog-hero {"):self.css.index(".catalog-hero::before {")]
+        self.assertIn("min-height: 0", hero_css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) 190px", hero_css)
+        self.assertNotIn("min-height: 350px", self.css)
+        self.assertIn("@media (max-width: 1240px)", self.css)
+        self.assertNotIn(".catalog-route", self.css)
+        self.assertIn("catalog-art--certificate", self.html)
+        self.assertIn("catalog-art--sandbox", self.html)
+        self.assertNotIn(".catalog-hero-art--nft i", self.css)
+        self.assertNotIn("NFT-софты сюда не попадут", self.html)
+        self.assertNotIn("ничего из тестнетов", self.html)
+
     def test_hub_has_no_bundled_software_catalog(self) -> None:
         by_id = {str(attrs["id"]) for _, attrs in self.dom.elements if attrs.get("id")}
         self.assertNotIn("discovery-grid", by_id)
@@ -1323,6 +1492,10 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("Скачивание и установка начнутся только после вашего разрешения", self.html)
         self.assertIn("function renderCoreUpdateGuide()", self.javascript)
         self.assertIn("function initializeCoreUpdater()", self.javascript)
+        self.assertIn("const CORE_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000", self.javascript)
+        self.assertIn("function recheckCoreUpdateIfDue()", self.javascript)
+        self.assertIn("state.coreUpdateCheckTimer = window.setInterval", self.javascript)
+        self.assertIn("Date.now() - checkedAt >= CORE_UPDATE_CHECK_INTERVAL_MS", self.javascript)
         self.assertIn("function announceCoreUpdateIfReady()", self.javascript)
         self.assertIn(
             "if (state.coreUpdate.phase !== 'installing') await refresh();",

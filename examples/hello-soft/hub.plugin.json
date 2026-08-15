@@ -1,11 +1,14 @@
 {
   "schema_version": 1,
-  "contract_version": "SH-SOFTWARE-0.6/3",
+  "contract_version": "SH-SOFTWARE-0.6/4",
   "id": "io.sprintray.hello",
   "name": "Hello Soft",
   "version": "1.1.0",
   "description": "Безопасный эталонный модуль: показывает дружелюбные настройки, честный progress и structured results без сети и секретов.",
   "author": "sprintray",
+  "catalog": {
+    "sections": ["general"]
+  },
   "presentation": {
     "display_name": "Hello Soft",
     "description": "Эталонный безопасный модуль Soft Hub: демонстрирует дружелюбные настройки запуска, честный progress, account lifecycle и структурированные результаты без сети и секретов.",
@@ -15,7 +18,7 @@
     }
   },
   "compatibility": {
-    "hub": ">=0.6.8",
+    "hub": ">=0.6.15",
     "python": ">=3.12,<3.13",
     "os": ["darwin"]
   },

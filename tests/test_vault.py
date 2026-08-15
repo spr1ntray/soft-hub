@@ -882,7 +882,7 @@ class VaultTestCase(unittest.TestCase):
                 "SELECT version FROM schema_migrations ORDER BY version"
             )
         ]
-        self.assertEqual(versions, list(range(1, 12)))
+        self.assertEqual(versions, list(range(1, 13)))
         before_unlock = migrated_database.one(
             "SELECT a.email_password_configured,s.nonce,s.ciphertext "
             "FROM accounts a JOIN account_secrets s ON s.account_id=a.id "

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME = "Soft Hub"
-APP_VERSION = "0.6.14"
+APP_VERSION = "0.6.15"
 PLUGIN_SCHEMA_VERSION = 1
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAX_UNPACKED_BYTES = 512 * 1024 * 1024

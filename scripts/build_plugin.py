@@ -20,6 +20,7 @@ from soft_hub.config import HubPaths
 from soft_hub.database import Database
 from soft_hub.plugins import (
     PluginManager,
+    STRICT_CONTRACT_VERSION,
     secret_material_reason,
     secret_payload_reason,
     validate_manifest,
@@ -62,7 +63,15 @@ def build(source: Path, output: Path) -> Path:
     manifest_path = source / "hub.plugin.json"
     if not manifest_path.is_file():
         raise ValueError("В source отсутствует hub.plugin.json")
-    validate_manifest(json.loads(manifest_path.read_text(encoding="utf-8")))
+    manifest = validate_manifest(
+        json.loads(manifest_path.read_text(encoding="utf-8"))
+    )
+    if manifest.get("contract_version") != STRICT_CONTRACT_VERSION:
+        raise ValueError(
+            "Штатный builder выпускает только новые пакеты контракта "
+            f"{STRICT_CONTRACT_VERSION}. Legacy-пакеты остаются совместимыми "
+            "с установщиком, но не должны пересобираться как новый релиз."
+        )
     files = files_for(source)
     checksums: dict[str, str] = {}
     payloads: dict[str, bytes] = {}

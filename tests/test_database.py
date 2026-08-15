@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -12,6 +13,126 @@ from soft_hub.database import Database
 
 
 class DatabaseMigrationTests(unittest.TestCase):
+    def test_run_catalog_migration_backfills_version_snapshot_with_safe_fallbacks(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="soft-hub-run-catalog-") as temporary:
+            paths = HubPaths.create(Path(temporary) / "data")
+            connection = sqlite3.connect(paths.database)
+            try:
+                for migration in sorted(
+                    database_module.MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql")
+                ):
+                    version = int(migration.name.split("_", 1)[0])
+                    if version >= 12:
+                        break
+                    connection.executescript(migration.read_text(encoding="utf-8"))
+                    connection.execute(
+                        "INSERT INTO schema_migrations(version,applied_at) VALUES (?,?)",
+                        (version, "2026-08-14T00:00:00+00:00"),
+                    )
+                now = "2026-08-14T00:00:00+00:00"
+                manifests = {
+                    "catalog-overlap": {
+                        "catalog": {"sections": ["testnet", "nft"]},
+                        "permissions": {"financial_risk": "none"},
+                        "actions": [],
+                    },
+                    "legacy-risk": {
+                        "permissions": {"financial_risk": "testnet"},
+                        "actions": [],
+                    },
+                    "legacy-action": {
+                        "permissions": {"financial_risk": "none"},
+                        "actions": [{"risk": "testnet_write"}],
+                    },
+                    "legacy-general": {
+                        "permissions": {"financial_risk": "none"},
+                        "actions": [{"risk": "read"}],
+                    },
+                    "structural-corrupt": {
+                        "permissions": {"financial_risk": "none"},
+                        "actions": ["not-an-action", None, 7],
+                    },
+                    "removed-last-version": {
+                        "permissions": {"financial_risk": "testnet"},
+                        "actions": [{"risk": "testnet_write"}],
+                    },
+                    "removed-old-version": {
+                        "permissions": {"financial_risk": "testnet"},
+                        "actions": [{"risk": "testnet_write"}],
+                    },
+                    "corrupt-version": None,
+                    "missing-version": {},
+                }
+                for module_id, manifest in manifests.items():
+                    encoded = (
+                        "{not-json"
+                        if manifest is None
+                        else json.dumps(manifest, separators=(",", ":"))
+                    )
+                    connection.execute(
+                        "INSERT INTO modules(id,name,version,description,active_path,"
+                        "manifest_json,enabled,trust_status,health,installed_at,updated_at) "
+                        "VALUES (?,?, '1.0.0','',?, ?,1,'local_unsigned','ready',?,?)",
+                        (module_id, module_id, f"/tmp/{module_id}", encoded, now, now),
+                    )
+                    if module_id not in {
+                        "missing-version",
+                        "removed-last-version",
+                        "removed-old-version",
+                    }:
+                        connection.execute(
+                            "INSERT INTO module_versions(module_id,version,path,manifest_json,"
+                            "archive_sha256,installed_at,active) VALUES "
+                            "(?,'1.0.0',?,?,'sha256',?,1)",
+                            (module_id, f"/tmp/{module_id}", encoded, now),
+                        )
+                    connection.execute(
+                        "INSERT INTO runs(id,module_id,module_version,action_id,status,requested_at) "
+                        "VALUES (?,?, '1.0.0','run','succeeded',?)",
+                        (f"run-{module_id}", module_id, now),
+                    )
+                connection.execute(
+                    "UPDATE modules SET active_path='',enabled=0,health='removed' "
+                    "WHERE id IN ('removed-last-version','removed-old-version')"
+                )
+                connection.execute(
+                    "UPDATE runs SET module_version='0.9.0' "
+                    "WHERE id='run-removed-old-version'"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            database = Database(paths)
+            snapshots = {
+                row["id"]: json.loads(row["catalog_sections_json"])
+                for row in database.all(
+                    "SELECT id,catalog_sections_json FROM runs ORDER BY id"
+                )
+            }
+            self.assertEqual(snapshots["run-catalog-overlap"], ["nft", "testnet"])
+            self.assertEqual(snapshots["run-legacy-risk"], ["testnet"])
+            self.assertEqual(snapshots["run-legacy-action"], ["testnet"])
+            self.assertEqual(snapshots["run-legacy-general"], ["general"])
+            self.assertEqual(snapshots["run-structural-corrupt"], ["general"])
+            self.assertEqual(snapshots["run-removed-last-version"], ["testnet"])
+            self.assertEqual(snapshots["run-removed-old-version"], ["general"])
+            self.assertEqual(snapshots["run-corrupt-version"], ["general"])
+            self.assertEqual(snapshots["run-missing-version"], ["general"])
+            self.assertEqual(
+                database.one(
+                    "SELECT COUNT(*) AS count FROM schema_migrations WHERE version=12"
+                ),
+                {"count": 1},
+            )
+            catalog_column = next(
+                row
+                for row in database.all("PRAGMA table_info(runs)")
+                if row["name"] == "catalog_sections_json"
+            )
+            self.assertEqual(catalog_column["notnull"], 1)
+            self.assertEqual(catalog_column["dflt_value"], "'[\"general\"]'")
+
     def test_failed_migration_rolls_back_schema_and_version_then_retries(self) -> None:
         with tempfile.TemporaryDirectory(prefix="soft-hub-migration-test-") as temporary:
             root = Path(temporary)

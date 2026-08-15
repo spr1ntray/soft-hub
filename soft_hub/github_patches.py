@@ -406,6 +406,7 @@ def annotate_patch_versions(
                 "candidate_version": None,
                 "installed_module_id": None,
                 "installed_version": None,
+                "module_removed": False,
                 "installable": False,
                 "version_reason": "package_unavailable",
             }
@@ -440,23 +441,44 @@ def annotate_patch_versions(
             continue
 
         module_ids = {str(source.get("module_id", "")) for source in repository_sources}
-        active_versions = {
-            str(source.get("active_version", "")) for source in repository_sources
+        history_states = {
+            bool(source.get("version_history_valid", True))
+            for source in repository_sources
         }
-        if "" in module_ids or "" in active_versions or len(module_ids) != 1 or len(active_versions) != 1:
+        version_floors = {
+            str(source.get("version_floor") or source.get("active_version") or "")
+            for source in repository_sources
+        }
+        removed_states = {
+            bool(source.get("module_removed", False)) for source in repository_sources
+        }
+        if (
+            "" in module_ids
+            or history_states != {True}
+            or "" in version_floors
+            or len(module_ids) != 1
+            or len(version_floors) != 1
+            or len(removed_states) != 1
+        ):
             patch.update(
                 {
                     "version_state": "identity_conflict",
-                    "version_reason": "repository_identity_conflict",
+                    "version_reason": (
+                        "version_history_invalid"
+                        if False in history_states
+                        else "repository_identity_conflict"
+                    ),
                 }
             )
             annotated.append(patch)
             continue
 
         module_id = next(iter(module_ids))
-        installed_version = next(iter(active_versions))
+        installed_version = next(iter(version_floors))
+        module_removed = next(iter(removed_states))
         patch["installed_module_id"] = module_id
         patch["installed_version"] = installed_version
+        patch["module_removed"] = module_removed
 
         exact_sources = [
             source
@@ -515,7 +537,9 @@ def annotate_patch_versions(
         if candidate_version == installed_version:
             patch.update(
                 {
-                    "version_state": "installed",
+                    "version_state": (
+                        "removed_current" if module_removed else "installed"
+                    ),
                     "version_reason": hint_reason,
                 }
             )
@@ -544,7 +568,11 @@ def annotate_patch_versions(
         elif precedence > 0:
             patch.update(
                 {
-                    "version_state": "update_available",
+                    "version_state": (
+                        "removed_update_available"
+                        if module_removed
+                        else "update_available"
+                    ),
                     "installable": True,
                     "version_reason": hint_reason,
                 }
@@ -552,7 +580,11 @@ def annotate_patch_versions(
         else:
             patch.update(
                 {
-                    "version_state": "newer_installed",
+                    "version_state": (
+                        "removed_newer_known"
+                        if module_removed
+                        else "newer_installed"
+                    ),
                     "version_reason": hint_reason,
                 }
             )

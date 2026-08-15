@@ -185,7 +185,7 @@
   "properties": {
     "$schema": { "type": "string" },
     "schema_version": { "const": 1 },
-    "contract_version": { "enum": ["SH-SOFTWARE-0.6/2", "SH-SOFTWARE-0.6/3"] },
+    "contract_version": { "enum": ["SH-SOFTWARE-0.6/2", "SH-SOFTWARE-0.6/3", "SH-SOFTWARE-0.6/4"] },
     "id": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$",
@@ -194,10 +194,31 @@
     "name": { "type": "string", "minLength": 1, "maxLength": 80 },
     "version": {
       "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"
+      "maxLength": 180,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
     },
     "description": { "type": "string", "maxLength": 500 },
     "author": { "type": "string", "maxLength": 120 },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sections"],
+      "properties": {
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["general", "nft", "testnet"] },
+          "allOf": [
+            {
+              "if": { "contains": { "const": "general" } },
+              "then": { "maxItems": 1 }
+            }
+          ]
+        }
+      }
+    },
     "presentation": {
       "type": "object",
       "additionalProperties": false,
@@ -228,7 +249,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "hub": { "type": "string" },
+        "hub": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^>=(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
         "python": { "type": "string", "minLength": 1, "maxLength": 80 },
         "os": {
           "type": "array",
@@ -377,7 +402,9 @@
     {
       "if": {
         "properties": {
-          "contract_version": { "const": "SH-SOFTWARE-0.6/2" }
+          "contract_version": {
+            "enum": ["SH-SOFTWARE-0.6/2", "SH-SOFTWARE-0.6/3", "SH-SOFTWARE-0.6/4"]
+          }
         },
         "required": ["contract_version"]
       },
@@ -403,6 +430,75 @@
                     }
                   }
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract_version": { "const": "SH-SOFTWARE-0.6/4" }
+        },
+        "required": ["contract_version"]
+      },
+      "then": { "required": ["catalog"] }
+    },
+    {
+      "if": { "required": ["catalog"] },
+      "then": {
+        "properties": {
+          "contract_version": { "const": "SH-SOFTWARE-0.6/4" }
+        },
+        "required": ["contract_version"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "actions": {
+            "contains": {
+              "type": "object",
+              "properties": { "risk": { "const": "testnet_write" } },
+              "required": ["risk"]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "catalog": {
+            "properties": {
+              "sections": { "contains": { "const": "testnet" } }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "catalog": {
+            "properties": {
+              "sections": { "contains": { "const": "testnet" } }
+            },
+            "required": ["sections"]
+          }
+        },
+        "required": ["catalog"]
+      },
+      "then": {
+        "properties": {
+          "permissions": {
+            "properties": { "financial_risk": { "not": { "const": "mainnet" } } }
+          },
+          "actions": {
+            "not": {
+              "contains": {
+                "type": "object",
+                "properties": { "risk": { "const": "mainnet_write" } },
+                "required": ["risk"]
               }
             }
           }

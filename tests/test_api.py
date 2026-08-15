@@ -207,6 +207,35 @@ class ApiSecurityTestCase(unittest.TestCase):
         )
         self.assert_security_headers(response_headers)
 
+    def test_public_module_projection_exposes_derived_catalog_without_mutating_manifest(self) -> None:
+        manifest = plugin_manifest(
+            plugin_id="api.legacy-testnet-catalog",
+            action_risk="testnet_write",
+            account_mode="one_or_more",
+            chains=[11155111],
+        )
+        archive = write_plugin_archive(
+            Path(self.temporary.name) / "legacy-testnet-catalog.softhub.zip",
+            manifest,
+        )
+        self.application.plugins.install(archive)
+
+        status, response_headers, body = self.request(
+            "GET",
+            "/api/modules",
+            headers={"X-Soft-Hub-Token": TEST_API_TOKEN},
+        )
+
+        self.assertEqual(status, 200)
+        modules = json.loads(body)["modules"]
+        module = next(
+            item for item in modules if item["id"] == "api.legacy-testnet-catalog"
+        )
+        self.assertEqual(module["catalog_sections"], ["testnet"])
+        self.assertNotIn("catalog", module["manifest"])
+        self.assertNotIn("active_path", module)
+        self.assert_security_headers(response_headers)
+
     def test_presentation_assets_are_authenticated_bounded_images_without_path_disclosure(self) -> None:
         manifest = plugin_manifest(plugin_id="api.presentation-test")
         manifest["presentation"] = {
@@ -1851,6 +1880,24 @@ class ApiSecurityTestCase(unittest.TestCase):
         obsolete = scan()
         self.assertEqual(obsolete["version_state"], "newer_installed")
         self.assertIs(obsolete["installable"], False)
+
+        self.application.plugins.uninstall("io.example.sample")
+        feed.version = "1.0.0"
+        removed_current = scan()
+        self.assertEqual(removed_current["version_state"], "removed_current")
+        self.assertIs(removed_current["installable"], False)
+
+        feed.version = "0.9.0"
+        removed_older = scan()
+        self.assertEqual(removed_older["version_state"], "removed_newer_known")
+        self.assertIs(removed_older["installable"], False)
+
+        feed.version = "1.1.0"
+        removed_update = scan()
+        self.assertEqual(
+            removed_update["version_state"], "removed_update_available"
+        )
+        self.assertIs(removed_update["installable"], True)
 
         status, _, body = self.request(
             "POST",

@@ -56,7 +56,7 @@ const asset = (name, size, extra = {}) => ({
   name,
   size,
   state: 'uploaded',
-  digest: name === 'SHA256SUMS' ? null : `sha256:${digest}`,
+  digest: `sha256:${digest}`,
   browser_download_url: `https://github.com/spr1ntray/soft-hub/releases/download/v1.2.0/${name}`,
   ...extra,
 });
@@ -64,6 +64,7 @@ const release = {
   tag_name: 'v1.2.0',
   draft: false,
   prerelease: false,
+  immutable: true,
   body: 'Safe release notes',
   assets: [asset('Soft-Hub-1.2.0-arm64.dmg', 123), asset('SHA256SUMS', 160)],
 };
@@ -76,6 +77,56 @@ assert.equal(inspectRelease({ ...release, body: 'safe\u202eevil' }, '1.1.9', 'da
 assert.equal(inspectRelease({ ...release, assets: undefined }, '1.2.0', 'darwin', 'arm64').status, 'up_to_date');
 assert.throws(() => inspectRelease({ ...release, prerelease: true }, '1.1.9', 'darwin', 'arm64'), /стабильным/);
 assert.throws(() => inspectRelease({ ...release, tag_name: '1.2.0' }, '1.1.9', 'darwin', 'arm64'), /v1\.2\.3/);
+assert.throws(() => inspectRelease({ ...release, immutable: false }, '1.1.9', 'darwin', 'arm64'), /не защищён от изменений/);
+
+const pinnedLegacy = {
+  id: 369702046,
+  tag_name: 'v0.6.14',
+  target_commitish: '426e39ce5c8ba9d264d0e95d641b4dc622e27b2b',
+  published_at: '2026-08-13T06:22:20Z',
+  draft: false,
+  prerelease: false,
+  immutable: false,
+  body: 'Pinned bridge',
+  assets: [
+    {
+      id: 512584062,
+      name: 'SHA256SUMS',
+      size: 182,
+      state: 'uploaded',
+      digest: 'sha256:043cb96ac3eb93f6f312ccc6069acc46b1389c4d311959c9fc983dbf6efab95a',
+      browser_download_url: 'https://github.com/spr1ntray/soft-hub/releases/download/v0.6.14/SHA256SUMS',
+    },
+    {
+      id: 512584063,
+      name: 'Soft-Hub-0.6.14-arm64.dmg',
+      size: 164471289,
+      state: 'uploaded',
+      digest: 'sha256:3150eb3e0b4bf21313bfce4844821742e0821656cd8ae728976693ed2a627db5',
+      browser_download_url: 'https://github.com/spr1ntray/soft-hub/releases/download/v0.6.14/Soft-Hub-0.6.14-arm64.dmg',
+    },
+    {
+      id: 512584061,
+      name: 'Soft-Hub-0.6.14-x64.exe',
+      size: 126548589,
+      state: 'uploaded',
+      digest: 'sha256:ad18af83dcf8bbe49c24805d3af3fe50855c3f3ef689730867e9faebfd0cbf47',
+      browser_download_url: 'https://github.com/spr1ntray/soft-hub/releases/download/v0.6.14/Soft-Hub-0.6.14-x64.exe',
+    },
+  ],
+};
+assert.equal(inspectRelease(pinnedLegacy, '0.6.13', 'darwin', 'arm64').status, 'available');
+assert.equal(inspectRelease(pinnedLegacy, '0.6.13', 'win32', 'x64').status, 'available');
+assert.throws(() => inspectRelease({
+  ...pinnedLegacy,
+  assets: pinnedLegacy.assets.map((entry) => entry.name.endsWith('.exe')
+    ? { ...entry, digest: `sha256:${'b'.repeat(64)}` }
+    : entry),
+}, '0.6.13', 'win32', 'x64'), /не защищён от изменений/);
+assert.throws(() => inspectRelease({
+  ...release,
+  assets: [asset('Soft-Hub-1.2.0-arm64.dmg', 123, { digest: null }), asset('SHA256SUMS', 160)],
+}, '1.1.9', 'darwin', 'arm64'), /не подтвердил SHA-256/);
 assert.throws(() => inspectRelease({ ...release, assets: [...release.assets, release.assets[0]] }, '1.1.9', 'darwin', 'arm64'), /ровно один/);
 assert.throws(() => inspectRelease({
   ...release,
@@ -140,10 +191,12 @@ const installerName = 'Soft-Hub-1.2.0-arm64.dmg';
 const installer = Buffer.from('verified installer fixture');
 const digest = crypto.createHash('sha256').update(installer).digest('hex');
 const checksum = Buffer.from(`${digest}  ${installerName}\n`);
+const checksumDigest = crypto.createHash('sha256').update(checksum).digest('hex');
 const release = {
   tag_name: 'v1.2.0',
   draft: false,
   prerelease: false,
+  immutable: true,
   body: 'What changed',
   assets: [
     {
@@ -157,6 +210,7 @@ const release = {
       name: 'SHA256SUMS',
       size: checksum.length,
       state: 'uploaded',
+      digest: `sha256:${checksumDigest}`,
       browser_download_url: 'https://github.com/spr1ntray/soft-hub/releases/download/v1.2.0/SHA256SUMS',
     },
   ],
@@ -254,10 +308,13 @@ const response = (payload, declared = payload.length) => new Response(payload, {
 });
 const exists = (root, suffix = '') => fs.existsSync(path.join(root, 'updates', `${installerName}${suffix}`));
 
-function releaseAndChecksum({ apiDigest = goodDigest, checksumApiDigest = null } = {}) {
+function releaseAndChecksum({ apiDigest = goodDigest, checksumApiDigest } = {}) {
   const checksum = Buffer.from(`${goodDigest}  ${installerName}\n`);
+  const resolvedChecksumDigest = checksumApiDigest === undefined
+    ? crypto.createHash('sha256').update(checksum).digest('hex')
+    : checksumApiDigest;
   const release = {
-    tag_name: 'v2.0.0', draft: false, prerelease: false, body: '',
+    tag_name: 'v2.0.0', draft: false, prerelease: false, immutable: true, body: '',
     assets: [
       {
         name: installerName,
@@ -270,7 +327,7 @@ function releaseAndChecksum({ apiDigest = goodDigest, checksumApiDigest = null }
         name: 'SHA256SUMS',
         size: checksum.length,
         state: 'uploaded',
-        digest: checksumApiDigest ? `sha256:${checksumApiDigest}` : null,
+        digest: resolvedChecksumDigest ? `sha256:${resolvedChecksumDigest}` : null,
         browser_download_url: 'https://github.com/spr1ntray/soft-hub/releases/download/v2.0.0/SHA256SUMS',
       },
     ],
@@ -278,7 +335,7 @@ function releaseAndChecksum({ apiDigest = goodDigest, checksumApiDigest = null }
   return { checksum, release, releaseJson: Buffer.from(JSON.stringify(release)) };
 }
 
-function updaterFixture({ root, release, checksum, installerResponse, getActiveRuns, confirmInstall, lifecycle = [] }) {
+function updaterFixture({ root, release, checksum, installerResponse, getActiveRuns, confirmInstall, lockVault, lifecycle = [] }) {
   return new HubUpdater({
     currentVersion: '1.9.9', platform: 'darwin', arch: 'arm64', userDataPath: root,
     fetchImpl: async (url, options) => {
@@ -289,7 +346,7 @@ function updaterFixture({ root, release, checksum, installerResponse, getActiveR
     },
     getActiveRuns: getActiveRuns || (async () => 0),
     confirmInstall: confirmInstall || (async () => true),
-    lockVault: async () => { lifecycle.push('lock'); },
+    lockVault: lockVault || (async () => { lifecycle.push('lock'); }),
     stopCore: async () => { lifecycle.push('stop'); },
     openInstaller: async () => { lifecycle.push('open'); },
     quitApp: () => { lifecycle.push('quit'); },
@@ -447,6 +504,32 @@ async function checkedDownload(updater) {
       assert.equal(exists(root, '.part'), false);
     }
 
+    // The installer is hashed again after Vault lock, immediately before the
+    // native launch. A same-user replacement at that boundary is rejected.
+    {
+      const root = makeRoot();
+      const { release, checksum } = releaseAndChecksum();
+      const lifecycle = [];
+      const updater = updaterFixture({
+        root, release, checksum, installerResponse: () => response(goodInstaller), lifecycle,
+        getActiveRuns: async () => { lifecycle.push('active'); return 0; },
+        confirmInstall: async () => { lifecycle.push('confirm'); return true; },
+        lockVault: async () => {
+          lifecycle.push('lock');
+          fs.writeFileSync(
+            path.join(root, 'updates', installerName),
+            Buffer.alloc(goodInstaller.length, 0x72),
+          );
+        },
+      });
+      assert.equal((await checkedDownload(updater)).status, 'downloaded');
+      const replaced = await updater.install();
+      assert.equal(replaced.status, 'error');
+      assert.match(replaced.message, /изменился перед запуском/);
+      assert.deepEqual(lifecycle, ['active', 'confirm', 'active', 'active', 'lock', 'active']);
+      assert.equal(exists(root), false, 'a replaced installer is removed before OS launch');
+    }
+
     // An OS launch failure happens before core shutdown and stays recoverable.
     {
       const root = makeRoot();
@@ -491,7 +574,11 @@ async function checkedDownload(updater) {
             name: windowsName,
             browser_download_url: `https://github.com/spr1ntray/soft-hub/releases/download/v2.0.0/${windowsName}`,
           },
-          { ...release.assets[1], size: windowsChecksum.length },
+          {
+            ...release.assets[1],
+            size: windowsChecksum.length,
+            digest: `sha256:${crypto.createHash('sha256').update(windowsChecksum).digest('hex')}`,
+          },
         ],
       };
       const updater = new HubUpdater({
@@ -517,6 +604,16 @@ async function checkedDownload(updater) {
       assert.match(failed.installIssue, /снова готова/);
       assert.deepEqual(lifecycle, ['active', 'confirm', 'active', 'active', 'lock', 'active', 'stop', 'open', 'recover']);
       assert.equal(fs.existsSync(path.join(root, 'updates', windowsName)), true);
+
+      lifecycle.length = 0;
+      updater.openInstaller = async (file, platform) => {
+        lifecycle.push('open');
+        assert.equal(platform, 'win32');
+        assert.equal(path.basename(file), windowsName);
+      };
+      const launched = await updater.install();
+      assert.equal(launched.status, 'installing');
+      assert.deepEqual(lifecycle, ['active', 'confirm', 'active', 'active', 'lock', 'active', 'stop', 'open', 'quit']);
     }
 
     // A DMG open succeeds before a stop failure; Hub does not quit and reports

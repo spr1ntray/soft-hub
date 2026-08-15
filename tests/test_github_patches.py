@@ -141,6 +141,64 @@ class GitHubPatchFeedTests(unittest.TestCase):
         self.assertEqual(local_newer["version_state"], "newer_installed")
         self.assertIs(local_newer["installable"], False)
 
+    def test_removed_module_tombstone_only_offers_a_strictly_newer_release(self) -> None:
+        source = self.installed_source("2.1.0")
+        source.update(
+            {
+                "active_version": None,
+                "version_floor": "2.1.0",
+                "module_removed": True,
+            }
+        )
+
+        same = annotate_patch_versions([self.ready_patch("2.1.0")], [source])[0]
+        newer = annotate_patch_versions([self.ready_patch("2.2.0")], [source])[0]
+        older = annotate_patch_versions([self.ready_patch("2.0.9")], [source])[0]
+
+        self.assertEqual(same["version_state"], "removed_current")
+        self.assertIs(same["installable"], False)
+        self.assertIs(same["module_removed"], True)
+        self.assertEqual(newer["version_state"], "removed_update_available")
+        self.assertIs(newer["installable"], True)
+        self.assertEqual(older["version_state"], "removed_newer_known")
+        self.assertIs(older["installable"], False)
+
+    def test_invalid_legacy_history_does_not_hide_healthy_repositories(self) -> None:
+        broken = self.installed_source("01.0.0", module_id="io.example.broken")
+        broken.update(
+            {
+                "version_floor": None,
+                "version_history_valid": False,
+            }
+        )
+        healthy = self.installed_source("2.0.0", module_id="io.example.healthy")
+        healthy.update(
+            {
+                "repository": "healthy.patch",
+                "release_tag": "v2.0.0",
+                "asset_name": "app-2.0.0.softhub.zip",
+                "asset_url": (
+                    "https://github.com/owner/healthy.patch/releases/download/"
+                    "v2.0.0/app-2.0.0.softhub.zip"
+                ),
+            }
+        )
+        patches = [
+            self.ready_patch("1.0.0"),
+            self.ready_patch("2.1.0", repository="healthy.patch"),
+        ]
+
+        broken_patch, healthy_patch = annotate_patch_versions(
+            patches,
+            [broken, healthy],
+        )
+
+        self.assertEqual(broken_patch["version_state"], "identity_conflict")
+        self.assertEqual(broken_patch["version_reason"], "version_history_invalid")
+        self.assertIs(broken_patch["installable"], False)
+        self.assertEqual(healthy_patch["version_state"], "update_available")
+        self.assertIs(healthy_patch["installable"], True)
+
     def test_patch_annotation_fails_closed_on_identity_or_version_metadata_collision(self) -> None:
         source = self.installed_source("1.0.0")
         conflicting_identity = {

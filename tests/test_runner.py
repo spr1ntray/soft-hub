@@ -528,6 +528,101 @@ class RunnerIntegrationTestCase(unittest.TestCase):
             {"count": 1},
         )
 
+    def test_catalog_snapshot_survives_module_update_and_uninstall(self) -> None:
+        self.vault.create(TEST_MASTER_PASSWORD)
+        self.vault.import_records(
+            [
+                ImportRecord(
+                    TEST_PRIVATE_KEY_A,
+                    "catalog-snapshot.test:28080:user:pass",
+                    "catalog-snapshot@example.test",
+                    label="Catalog Snapshot",
+                )
+            ]
+        )
+        account = self.vault.list_accounts()[0]
+        v1 = plugin_manifest(
+            version="1.0.0",
+            plugin_id="runner.catalog-snapshot",
+            action_risk="testnet_write",
+            account_mode="one_or_more",
+            chains=[11155111],
+        )
+        v1["compatibility"]["hub"] = ">=0.6.8"
+        v1["actions"][0]["output"] = {
+            "mode": "account_table",
+            "title": "Catalog history",
+            "primary_kind": "catalog_snapshot",
+            "columns": [
+                {
+                    "key": "points",
+                    "title": "Points",
+                    "type": "integer",
+                    "aggregate": "sum",
+                }
+            ],
+        }
+        source = '''def run(context):
+    for account in context.accounts:
+        context.result(
+            "Catalog snapshot",
+            kind="catalog_snapshot",
+            status="succeeded",
+            account_id=account.id,
+            data={"points": 1},
+        )
+        context.account_state(
+            account.id,
+            status="succeeded",
+            stage="completed",
+            progress=1,
+            message="Done",
+        )
+    return {"ok": True}
+'''
+        self.install_plugin(source, v1)
+        started = self.runs.start(
+            "runner.catalog-snapshot",
+            "run",
+            [str(account["id"])],
+            acknowledgement="TESTNET",
+        )
+        run_id = str(started["id"])
+        self.assertEqual(self.wait_for_terminal(run_id)["status"], "succeeded")
+        wait_until(lambda: run_id not in self.runs._threads, timeout=3)
+
+        v2 = plugin_manifest(
+            version="2.0.0",
+            plugin_id="runner.catalog-snapshot",
+        )
+        self.install_plugin('def run(context):\n    return {"ok": True}\n', v2)
+        self.assertEqual(
+            self.runs.get(run_id)["catalog_sections"],
+            ["testnet"],
+        )
+
+        removed = self.runs.uninstall_module("runner.catalog-snapshot")
+        self.assertTrue(removed["removed"])
+        self.assertEqual(
+            self.runs.get(run_id)["catalog_sections"],
+            ["testnet"],
+        )
+        historical_results = [
+            result for result in self.runs.results() if result["run_id"] == run_id
+        ]
+        self.assertEqual(len(historical_results), 1)
+        self.assertEqual(historical_results[0]["catalog_sections"], ["testnet"])
+        reports = self.runs.result_reports(run_id=run_id)
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0]["catalog_sections"], ["testnet"])
+        self.assertEqual(
+            json.loads(
+                self.database.one(
+                    "SELECT catalog_sections_json FROM runs WHERE id=?", (run_id,)
+                )["catalog_sections_json"]
+            ),
+            ["testnet"],
+        )
     def test_integer_aggregates_never_serialize_as_unsafe_json_numbers(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
         self.vault.import_records(

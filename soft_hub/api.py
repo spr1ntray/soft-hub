@@ -28,7 +28,7 @@ from .github_patches import (
     normalize_owner,
 )
 from .instance_lock import DataDirectoryLock
-from .plugins import PluginError, PluginManager
+from .plugins import PluginError, PluginManager, catalog_sections
 from .runner import IdempotencyConflictError, RunError, RunManager
 from .vault import ImportRecord, ReferralRevisionConflict, Vault, VaultError
 
@@ -185,7 +185,9 @@ def _xlsx_workbook(rows: list[dict[str, Any]]) -> bytes:
 
 def _public_module(module: dict[str, Any]) -> dict[str, Any]:
     """Keep host filesystem layout on the trusted core side of the API boundary."""
-    return {key: value for key, value in module.items() if key != "active_path"}
+    public = {key: value for key, value in module.items() if key != "active_path"}
+    public["catalog_sections"] = catalog_sections(public.get("manifest"))
+    return public
 
 
 class ApiError(ValueError):

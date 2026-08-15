@@ -20,7 +20,7 @@ from typing import Any, Iterable
 
 from .config import HubPaths, project_root
 from .database import Database, utc_now
-from .plugins import PluginError, PluginManager
+from .plugins import PluginError, PluginManager, catalog_sections
 from .sdk import ACCOUNT_STATE_STATUSES
 from .vault import Vault, VaultError
 
@@ -188,6 +188,14 @@ class IdempotencyConflictError(RunError):
 
 
 FORCE_STOP_ACKNOWLEDGEMENT = "FORCE STOP"
+
+
+def _catalog_snapshot(value: Any) -> list[str]:
+    try:
+        sections = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, json.JSONDecodeError):
+        return ["general"]
+    return catalog_sections({"catalog": {"sections": sections}})
 
 
 def _normalize_idempotency_key(value: Any) -> str:
@@ -1025,8 +1033,8 @@ class RunManager:
         output = _output_contract(action.get("output")) or {}
         connection.execute(
             "INSERT INTO runs(id,module_id,module_version,action_id,status,progress,account_count,"
-            "account_concurrency,requested_at,output_schema_json) "
-            "VALUES (?,?,?,?, 'queued',0,?,?,?,?)",
+            "account_concurrency,requested_at,output_schema_json,catalog_sections_json) "
+            "VALUES (?,?,?,?, 'queued',0,?,?,?,?,?)",
             (
                 run_id,
                 module["id"],
@@ -1036,6 +1044,11 @@ class RunManager:
                 prepared["account_concurrency"],
                 prepared["requested_at"],
                 json.dumps(output, ensure_ascii=False, separators=(",", ":")),
+                json.dumps(
+                    catalog_sections(module["manifest"]),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
             ),
         )
         for account_id in prepared["account_ids"]:
@@ -2385,6 +2398,9 @@ class RunManager:
     @staticmethod
     def _present_run(row: dict[str, Any]) -> dict[str, Any]:
         row["summary"] = json.loads(row.pop("summary_json") or "{}")
+        row["catalog_sections"] = _catalog_snapshot(
+            row.pop("catalog_sections_json", None)
+        )
         manifest_json = row.pop("run_manifest_json", None)
         if manifest_json:
             try:
@@ -2624,6 +2640,9 @@ class RunManager:
             "run_id": row["run_id"],
             "module_id": row["module_id"],
             "module_name": row["module_name"],
+            "catalog_sections": _catalog_snapshot(
+                row.get("catalog_sections_json")
+            ),
             "action_id": row["action_id"],
             "requested_at": row["requested_at"],
             "finished_at": row["finished_at"],
@@ -2662,12 +2681,13 @@ class RunManager:
         rows = self.database.all(
             "SELECT r.id AS run_id,r.module_id,m.name AS module_name,r.action_id,"
             "r.requested_at,r.finished_at,r.status AS run_status,r.output_schema_json,"
+            "r.catalog_sections_json,"
             f"COUNT(s.account_id) AS total,{count_columns} "
             "FROM runs r JOIN modules m ON m.id=r.module_id "
             "LEFT JOIN run_account_states s ON s.run_id=r.id "
             f"WHERE {' AND '.join(predicates)} "
             "GROUP BY r.id,r.module_id,m.name,r.action_id,r.requested_at,r.finished_at,"
-            "r.status,r.output_schema_json "
+            "r.status,r.output_schema_json,r.catalog_sections_json "
             "ORDER BY r.requested_at DESC,r.id DESC LIMIT ?",
             (*params, capped_limit),
         )
@@ -2837,11 +2857,16 @@ class RunManager:
 
     def results(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.database.all(
-            "SELECT x.*,m.name AS module_name,a.label AS account_label FROM results x "
-            "JOIN modules m ON m.id=x.module_id LEFT JOIN accounts a ON a.id=x.account_id "
+            "SELECT x.*,m.name AS module_name,a.label AS account_label,"
+            "r.catalog_sections_json FROM results x "
+            "JOIN runs r ON r.id=x.run_id JOIN modules m ON m.id=x.module_id "
+            "LEFT JOIN accounts a ON a.id=x.account_id "
             "ORDER BY x.created_at DESC LIMIT ?",
             (max(1, min(500, limit)),),
         )
         for row in rows:
             row["data"] = json.loads(row.pop("data_json") or "{}")
+            row["catalog_sections"] = _catalog_snapshot(
+                row.pop("catalog_sections_json", None)
+            )
         return rows

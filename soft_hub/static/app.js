@@ -3,6 +3,8 @@ const apiToken = tokenParams.get('token') || window.sessionStorage.getItem('soft
 if (apiToken) window.sessionStorage.setItem('soft-hub-token', apiToken);
 window.history.replaceState(null, '', window.location.pathname);
 
+const CORE_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 const state = {
   data: null,
   view: 'overview',
@@ -62,6 +64,8 @@ const state = {
   resultReportLoading: false,
   resultReportRequestGeneration: 0,
   resultReportFilterTimer: null,
+  resultCatalogFilter: 'all',
+  catalogBatchScope: 'all',
   patchRadarTimer: null,
   coreUpdate: {
     phase: 'idle',
@@ -77,6 +81,7 @@ const state = {
     installIssue: '',
   },
   coreUpdateAutoCheckStarted: false,
+  coreUpdateCheckTimer: null,
   coreUpdateUnsubscribe: null,
   coreUpdateNotifiedVersion: '',
   protectedDataEpoch: 0,
@@ -96,9 +101,34 @@ const pageMeta = {
   software: ['МОИ СОФТЫ', 'Софты'],
   accounts: ['АККАУНТЫ', 'Аккаунты'],
   results: ['ИТОГИ', 'Результаты'],
+  nft: ['NFT · WL / MINT / MARKET', 'NFT'],
+  testnets: ['TESTNET · RUN / TRACK / PARSE', 'Тестнеты'],
   patches: ['ПАТЧИ', 'Патчи'],
   settings: ['НАСТРОЙКИ', 'Настройки'],
 };
+
+const catalogSectionMeta = {
+  nft: {
+    label: 'NFT',
+    plural: 'NFT-софтов',
+    emptyTitle: 'NFT-софтов пока нет',
+    emptyCopy: 'Установите патч, отмеченный разделом NFT, — карточка сразу появится здесь.',
+    searchEmptyCopy: 'По вашему запросу ничего не нашлось. Можно сбросить поиск и посмотреть весь раздел.',
+  },
+  testnet: {
+    label: 'TESTNET',
+    plural: 'тестнет-софтов',
+    emptyTitle: 'Тестнет-софтов пока нет',
+    emptyCopy: 'Установите патч для тестовой сети — Hub сам положит его в этот раздел.',
+    searchEmptyCopy: 'По вашему запросу ничего не нашлось. Сбросьте поиск, чтобы вернуть все тестнеты.',
+  },
+};
+
+function catalogSectionForView(view) {
+  if (view === 'nft') return 'nft';
+  if (view === 'testnets') return 'testnet';
+  return '';
+}
 
 const MAX_DRAWER_EVENT_LINES = 2_000;
 const MAX_ACTIVITY_ROWS = 40;
@@ -307,6 +337,60 @@ function accentClass(module) {
   return `accent-${hash % 6}`;
 }
 
+function normalizeCatalogSections(value) {
+  const source = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+  return Array.from(new Set(source.map((entry) => {
+    const normalized = String(entry || '').trim().toLowerCase();
+    if (normalized === 'testnets') return 'testnet';
+    return normalized;
+  }).filter((entry) => ['general', 'nft', 'testnet'].includes(entry))));
+}
+
+function fallbackManifestCatalogSections(manifest = {}) {
+  const declared = normalizeCatalogSections(manifest.catalog?.sections || manifest.catalog_sections);
+  if (declared.length) return declared;
+  const actions = Array.isArray(manifest.actions) ? manifest.actions : [];
+  if (
+    manifest.permissions?.financial_risk === 'testnet'
+    || actions.some((action) => action?.risk === 'testnet_write')
+  ) return ['testnet'];
+  return ['general'];
+}
+
+function moduleCatalogSections(module) {
+  const projected = normalizeCatalogSections(module?.catalog_sections);
+  return projected.length ? projected : fallbackManifestCatalogSections(module?.manifest || {});
+}
+
+function moduleBelongsToCatalog(module, section) {
+  return moduleCatalogSections(module).includes(section);
+}
+
+function recordCatalogSections(record) {
+  const projected = normalizeCatalogSections(record?.catalog_sections);
+  if (projected.length) return projected;
+  const manifest = record?.run_manifest || record?.manifest;
+  if (manifest && typeof manifest === 'object') return fallbackManifestCatalogSections(manifest);
+  const module = state.data?.modules?.find((candidate) => candidate.id === record?.module_id);
+  return module ? moduleCatalogSections(module) : ['general'];
+}
+
+function recordBelongsToCatalog(record, section) {
+  return recordCatalogSections(record).includes(section);
+}
+
+function catalogModules(section) {
+  return (state.data?.modules || []).filter((module) => moduleBelongsToCatalog(module, section));
+}
+
+function catalogSectionChips(module) {
+  const sections = moduleCatalogSections(module);
+  return sections.map((section) => {
+    const label = section === 'nft' ? 'NFT' : section === 'testnet' ? 'TESTNET' : 'ОБЩЕЕ';
+    return `<span class="catalog-section-chip" data-catalog-section="${escapeHtml(section)}">${label}</span>`;
+  }).join('');
+}
+
 function modulePresentation(module) {
   const presentation = module?.manifest?.presentation;
   if (!presentation || typeof presentation !== 'object') return null;
@@ -410,7 +494,7 @@ function syncPresentationAssets() {
       const key = presentationAssetKey(module, kind);
       if (!key) continue;
       validKeys.add(key);
-      if (kind === 'icon' || state.view === 'software' || state.presentationUrls.has(key)) {
+      if (kind === 'icon' || ['software', 'nft', 'testnets'].includes(state.view) || state.presentationUrls.has(key)) {
         void loadPresentationAsset(module, kind);
       }
     }
@@ -507,6 +591,7 @@ const focusIdentityAttributes = [
   'data-install-patch',
   'data-open-patch-repository',
   'data-quick-action',
+  'data-open-catalog-report',
 ];
 
 function focusIdentity(element) {
@@ -621,7 +706,12 @@ function prefersReducedMotion() {
 
 function updateNavigationState(name = state.view) {
   const navigation = $('.navigation');
-  if (navigation) navigation.dataset.activeView = name;
+  if (!navigation) return;
+  navigation.dataset.activeView = name;
+  const active = $(`.nav-item[data-view="${name}"]`, navigation);
+  if (!active) return;
+  const line = $('#nav-line');
+  if (line && line.parentElement !== active) active.append(line);
 }
 
 function showView(name) {
@@ -658,6 +748,11 @@ function showView(name) {
     if (changed) window.requestAnimationFrame(() => $('#page-title').focus({ preventScroll: true }));
     if (name === 'accounts') renderAccounts();
     if (name === 'software') syncPresentationAssets();
+    if (catalogSectionForView(name)) {
+      renderCatalogWorkspaces();
+      syncPresentationAssets();
+      if (state.data?.vault?.unlocked) void loadResultReports({ force: false });
+    }
     if (name === 'results') {
       renderResults();
       renderResultReportWorkbench();
@@ -818,7 +913,7 @@ function normalizeCoreUpdateNotes(value) {
 
 function coreUpdateErrorKind(value) {
   const message = String(value?.message || value || '').toLowerCase();
-  if (/checksum|sha(?:256|512)|signature|integrity|verif|подпис|провер/.test(message)) return 'verification';
+  if (/checksum|sha(?:256|512)|signature|integrity|immutable|verif|подпис|провер|защищ.*измен/.test(message)) return 'verification';
   if (/offline|network|internet|github|econn|enotfound|timed?\s*out|http|fetch|request/.test(message)) return 'offline';
   return 'generic';
 }
@@ -1261,6 +1356,22 @@ async function initializeCoreUpdater() {
   if (!['available', 'downloading', 'ready', 'installing'].includes(state.coreUpdate.phase)) {
     await checkCoreUpdate();
   }
+  if (state.coreUpdateCheckTimer === null) {
+    state.coreUpdateCheckTimer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (['checking', 'downloading', 'ready', 'installing'].includes(state.coreUpdate.phase)) return;
+      void checkCoreUpdate();
+    }, CORE_UPDATE_CHECK_INTERVAL_MS);
+  }
+}
+
+function recheckCoreUpdateIfDue() {
+  if (state.coreUpdate.bridgeAvailable !== true) return;
+  if (['checking', 'downloading', 'ready', 'installing'].includes(state.coreUpdate.phase)) return;
+  const checkedAt = new Date(state.coreUpdate.checkedAt || '').getTime();
+  if (!Number.isFinite(checkedAt) || Date.now() - checkedAt >= CORE_UPDATE_CHECK_INTERVAL_MS) {
+    void checkCoreUpdate();
+  }
 }
 
 function renderDock() {
@@ -1291,6 +1402,8 @@ function renderMetrics() {
   $('[data-nav-count="modules"]').textContent = stats.modules || '';
   $('[data-nav-count="accounts"]').textContent = locked ? '' : stats.accounts || '';
   $('[data-nav-count="attention"]').textContent = stats.attention_runs || '';
+  $('[data-nav-count="nft"]').textContent = catalogModules('nft').length || '';
+  $('[data-nav-count="testnets"]').textContent = catalogModules('testnet').length || '';
   const patchCount = state.patchFeed.filter((patch) => patch.installable === true).length;
   $('[data-nav-count="patches"]').textContent = patchCount || '';
   $('#live-pill-text').textContent = stats.active_runs
@@ -1371,6 +1484,59 @@ function renderOverviewModules() {
 }
 
 function renderSoftware() {
+  return renderSoftwareLibrary();
+}
+
+function softwareCardMarkup(module, moduleIndex, { scope = 'all', showCatalogChips = false } = {}) {
+  const manifest = module.manifest;
+  const risk = manifest.permissions.financial_risk;
+  const actionCount = manifest.actions.length;
+  const batchReady = module.enabled && module.health === 'ready';
+  const selected = state.batchModuleIds.has(module.id);
+  const activeCount = state.data.runs.filter((run) => run.module_id === module.id && ACTIVE_RUN_STATUSES.has(run.status)).length;
+  const safeScope = String(scope).replace(/[^a-z0-9_-]/gi, '-') || 'all';
+  const controlId = `${safeScope}-software-control-${moduleIndex}`;
+  const toggleTitle = module.enabled ? 'Выключить софт' : 'Включить софт';
+  const toggleDetail = module.enabled ? 'Новые запуски станут недоступны. Текущие продолжат работу' : 'Софт снова появится среди доступных для запуска';
+  return `
+    <article class="software-card border-glow ${accentClass(module)} ${selected ? 'is-selected' : ''}" data-software-id="${escapeHtml(module.id)}">
+      ${moduleCoverMarkup(module)}
+      <div class="software-card-head">
+        <div class="software-card-identity">${moduleIconMarkup(module)}</div>
+        <div class="software-card-controls">
+          <span class="module-version">v${escapeHtml(module.version)}</span>
+          <label class="card-select" title="${batchReady ? 'Добавить в пачку' : 'Сначала включите и подготовьте софт'}">
+            <input type="checkbox" data-batch-module="${escapeHtml(module.id)}" data-batch-scope="${escapeHtml(scope)}" aria-label="Выбрать ${escapeHtml(moduleDisplayName(module))} для пакетного запуска" ${selected ? 'checked' : ''} ${batchReady ? '' : 'disabled'} />
+            <span>${iconMarkup('check')}</span>
+          </label>
+        </div>
+      </div>
+      <h3>${escapeHtml(moduleDisplayName(module))}</h3>
+      <p>${escapeHtml(moduleDisplayDescription(module))}</p>
+      <div class="software-meta">
+        ${showCatalogChips ? catalogSectionChips(module) : ''}
+        <span class="risk-chip" data-risk="${escapeHtml(risk)}">${escapeHtml(riskNames[risk] || risk)}</span>
+        <span class="risk-chip">${actionCount} ${countWord(actionCount, 'ДЕЙСТВИЕ', 'ДЕЙСТВИЯ', 'ДЕЙСТВИЙ')}</span>
+        ${activeCount ? `<span class="status-chip" data-state="ready">${activeCount} ${activeCount === 1 ? 'РАБОТАЕТ' : 'В РАБОТЕ'}</span>` : ''}
+        <span class="status-chip" data-state="${module.health === 'ready' ? 'ready' : 'warning'}">${module.health === 'ready' ? 'ГОТОВ' : 'НУЖНА НАСТРОЙКА'}</span>
+      </div>
+      <div class="software-actions">
+        ${module.health === 'ready'
+          ? `<button class="button button--ink specular-button" type="button" data-run-module="${escapeHtml(module.id)}" ${module.enabled ? '' : 'disabled'}>${iconMarkup('play')} ${module.enabled ? 'Запустить' : 'Выключен'}</button>`
+          : `<button class="button button--acid specular-button" type="button" data-prepare-module="${escapeHtml(module.id)}">${iconMarkup('patch')} Подготовить</button>`}
+        <span class="card-action-control">
+          <button class="mini-button" type="button" data-toggle-module="${escapeHtml(module.id)}" aria-label="${toggleTitle}: ${escapeHtml(moduleDisplayName(module))}" aria-describedby="${controlId}-toggle-tip">${iconMarkup('power')}</button>
+          <span id="${controlId}-toggle-tip" class="card-action-tooltip" role="tooltip"><strong>${toggleTitle}</strong><span>${toggleDetail}</span></span>
+        </span>
+        <span class="card-action-control card-action-control--end">
+          <button class="mini-button mini-button--danger" type="button" data-delete-module="${escapeHtml(module.id)}" aria-label="Удалить софт: ${escapeHtml(moduleDisplayName(module))}" aria-describedby="${controlId}-delete-tip">${iconMarkup('trash')}</button>
+          <span id="${controlId}-delete-tip" class="card-action-tooltip" role="tooltip"><strong>Удалить софт</strong><span>Удалим код и окружение, а запуски и результаты оставим</span></span>
+        </span>
+      </div>
+    </article>`;
+}
+
+function renderSoftwareLibrary() {
   const root = $('#software-grid');
   const modules = state.data.modules;
   const installedIds = new Set(modules.map((module) => module.id));
@@ -1386,52 +1552,11 @@ function renderSoftware() {
     updateBatchControls();
     return;
   }
-  root.innerHTML = modules.map((module, moduleIndex) => {
-    const manifest = module.manifest;
-    const risk = manifest.permissions.financial_risk;
-    const actionCount = manifest.actions.length;
-    const batchReady = module.enabled && module.health === 'ready';
-    const selected = state.batchModuleIds.has(module.id);
-    const activeCount = state.data.runs.filter((run) => run.module_id === module.id && ['queued', 'starting', 'running', 'cancelling'].includes(run.status)).length;
-    const controlId = `software-control-${moduleIndex}`;
-    const toggleTitle = module.enabled ? 'Выключить софт' : 'Включить софт';
-    const toggleDetail = module.enabled ? 'Новые запуски станут недоступны. Текущие продолжат работу' : 'Софт снова появится среди доступных для запуска';
-    return `
-      <article class="software-card border-glow ${accentClass(module)} ${selected ? 'is-selected' : ''}" data-software-id="${escapeHtml(module.id)}">
-        ${moduleCoverMarkup(module)}
-        <div class="software-card-head">
-          <div class="software-card-identity">${moduleIconMarkup(module)}</div>
-          <div class="software-card-controls">
-            <span class="module-version">v${escapeHtml(module.version)}</span>
-            <label class="card-select" title="${batchReady ? 'Добавить в пачку' : 'Сначала включите и подготовьте софт'}">
-              <input type="checkbox" data-batch-module="${escapeHtml(module.id)}" aria-label="Выбрать ${escapeHtml(moduleDisplayName(module))} для пакетного запуска" ${selected ? 'checked' : ''} ${batchReady ? '' : 'disabled'} />
-              <span>${iconMarkup('check')}</span>
-            </label>
-          </div>
-        </div>
-        <h3>${escapeHtml(moduleDisplayName(module))}</h3>
-        <p>${escapeHtml(moduleDisplayDescription(module))}</p>
-        <div class="software-meta">
-          <span class="risk-chip" data-risk="${escapeHtml(risk)}">${escapeHtml(riskNames[risk] || risk)}</span>
-          <span class="risk-chip">${actionCount} ${countWord(actionCount, 'ДЕЙСТВИЕ', 'ДЕЙСТВИЯ', 'ДЕЙСТВИЙ')}</span>
-          ${activeCount ? `<span class="status-chip" data-state="ready">${activeCount} ${activeCount === 1 ? 'РАБОТАЕТ' : 'В РАБОТЕ'}</span>` : ''}
-          <span class="status-chip" data-state="${module.health === 'ready' ? 'ready' : 'warning'}">${module.health === 'ready' ? 'ГОТОВ' : 'НУЖНА НАСТРОЙКА'}</span>
-        </div>
-        <div class="software-actions">
-          ${module.health === 'ready'
-            ? `<button class="button button--ink specular-button" type="button" data-run-module="${escapeHtml(module.id)}" ${module.enabled ? '' : 'disabled'}>${iconMarkup('play')} ${module.enabled ? 'Запустить' : 'Выключен'}</button>`
-            : `<button class="button button--acid specular-button" type="button" data-prepare-module="${escapeHtml(module.id)}">${iconMarkup('patch')} Подготовить</button>`}
-          <span class="card-action-control">
-            <button class="mini-button" type="button" data-toggle-module="${escapeHtml(module.id)}" aria-label="${toggleTitle}: ${escapeHtml(moduleDisplayName(module))}" aria-describedby="${controlId}-toggle-tip">${iconMarkup('power')}</button>
-            <span id="${controlId}-toggle-tip" class="card-action-tooltip" role="tooltip"><strong>${toggleTitle}</strong><span>${toggleDetail}</span></span>
-          </span>
-          <span class="card-action-control card-action-control--end">
-            <button class="mini-button mini-button--danger" type="button" data-delete-module="${escapeHtml(module.id)}" aria-label="Удалить софт: ${escapeHtml(moduleDisplayName(module))}" aria-describedby="${controlId}-delete-tip">${iconMarkup('trash')}</button>
-            <span id="${controlId}-delete-tip" class="card-action-tooltip" role="tooltip"><strong>Удалить софт</strong><span>Удалим код и окружение, а запуски и результаты оставим</span></span>
-          </span>
-        </div>
-      </article>`;
-  }).join('');
+  root.innerHTML = modules.map((module, moduleIndex) => softwareCardMarkup(
+    module,
+    moduleIndex,
+    { scope: 'all', showCatalogChips: true },
+  )).join('');
   decorateAnimatedList(root);
   updateBatchControls();
 }
@@ -1454,6 +1579,193 @@ function updateBatchControls() {
   if (dockCount) dockCount.textContent = count || '';
   const dockBatch = $('[data-quick-action="batch"]');
   if (dockBatch) dockBatch.setAttribute('aria-label', count ? `Проверить и запустить выбранные софты: ${count}` : 'Выбрать софты для пакетного запуска');
+}
+
+function catalogSelectedModules(section) {
+  return catalogModules(section).filter((module) => state.batchModuleIds.has(module.id));
+}
+
+function syncBatchSelectionSurface() {
+  $$('input[data-batch-module]').forEach((checkbox) => {
+    const selected = state.batchModuleIds.has(checkbox.dataset.batchModule);
+    checkbox.checked = selected;
+    checkbox.closest('.software-card')?.classList.toggle('is-selected', selected);
+  });
+  updateBatchControls();
+  updateCatalogBatchControls();
+  renderDock();
+}
+
+function beginCatalogBatchSelection(section) {
+  if (state.catalogBatchScope === section) return;
+  state.catalogBatchScope = section;
+  state.batchIdempotencyKey = null;
+  state.batchModuleIds.clear();
+  state.batchActionIds.clear();
+}
+
+function updateCatalogBatchControls() {
+  if (!state.data) return;
+  for (const section of Object.keys(catalogSectionMeta)) {
+    const count = catalogSelectedModules(section).length;
+    const bar = $(`[data-catalog-batch-bar="${section}"]`);
+    if (!bar) continue;
+    bar.dataset.hasSelection = String(count > 0);
+    $(`[data-catalog-batch-title="${section}"]`).textContent = count
+      ? `Выбрано: ${count}`
+      : section === 'nft' ? 'Пакетный запуск NFT' : 'Пакетный запуск тестнетов';
+    $(`[data-catalog-batch-copy="${section}"]`).textContent = count
+      ? `В пачке только ${catalogSectionMeta[section].plural}. Проверьте действия перед стартом.`
+      : section === 'nft'
+        ? 'Отметьте нужные карточки — запустим только NFT-софты.'
+        : 'Отметьте нужные карточки — запустим выбранные тестнет-софты.';
+    const clear = $(`[data-catalog-clear-selection="${section}"]`);
+    const open = $(`[data-catalog-open-batch="${section}"]`);
+    clear.hidden = count === 0;
+    open.disabled = count === 0;
+    $('span', open).textContent = count ? `Запустить ${count}` : 'Запустить выбранные';
+  }
+}
+
+function catalogEmptyMarkup(section, { query = '', kind = 'software' } = {}) {
+  const meta = catalogSectionMeta[section];
+  if (kind === 'locked') {
+    return '<div class="catalog-inline-empty"><span aria-hidden="true">••</span><div><strong>Результаты скрыты, пока Vault закрыт</strong><small>Разблокируйте Vault — история этого раздела появится на месте.</small></div></div>';
+  }
+  if (kind === 'runs') {
+    return '<div class="catalog-inline-empty"><span aria-hidden="true">00</span><div><strong>Запусков пока нет</strong><small>После первого старта здесь появится живой прогресс.</small></div></div>';
+  }
+  if (kind === 'results') {
+    return '<div class="catalog-inline-empty"><span aria-hidden="true">00</span><div><strong>Итогов пока нет</strong><small>Они появятся после первого завершённого запуска.</small></div></div>';
+  }
+  if (kind === 'reports') {
+    return '<div class="catalog-inline-empty"><span aria-hidden="true">00</span><div><strong>Отчётов пока нет</strong><small>Софт с режимом парсинга соберёт здесь таблицу по кошелькам.</small></div></div>';
+  }
+  if (query) {
+    return `<div class="empty-state panel catalog-software-empty"><span class="empty-glyph">⌕</span><h3>Здесь пока пусто</h3><p>${escapeHtml(meta.searchEmptyCopy)}</p><button class="button button--quiet" type="button" data-catalog-clear-search="${escapeHtml(section)}">Сбросить поиск</button></div>`;
+  }
+  return `<div class="empty-state panel catalog-software-empty"><span class="empty-glyph">${section === 'nft' ? 'NFT' : 'TN'}</span><h3>${escapeHtml(meta.emptyTitle)}</h3><p>${escapeHtml(meta.emptyCopy)}</p><button class="button button--acid specular-button" type="button" data-catalog-open-patches>Перейти к патчам</button></div>`;
+}
+
+function catalogResultRow(result) {
+  const tone = resultTone(result.status);
+  const icon = tone === 'success' ? 'check' : tone === 'attention' ? 'alert' : 'history';
+  const tag = result.run_id ? 'button' : 'div';
+  const action = result.run_id ? ` type="button" data-open-run="${escapeHtml(result.run_id)}"` : '';
+  return `<${tag} class="catalog-result-row" data-tone="${tone}"${action}>
+    <span class="catalog-result-icon" aria-hidden="true">${iconMarkup(icon)}</span>
+    <span><strong>${escapeHtml(result.title || 'Результат')}</strong><small>${escapeHtml(result.account_label || 'Общий итог')} · ${escapeHtml(resultStatusLabel(result.status))}</small></span>
+    <time datetime="${escapeHtml(result.created_at || '')}">${escapeHtml(relativeTime(result.created_at))}</time>
+  </${tag}>`;
+}
+
+function catalogReportRow(report, section) {
+  const active = ACTIVE_RUN_STATUSES.has(report.run_status);
+  const status = active ? 'ИДЁТ СЕЙЧАС' : report.run_status === 'succeeded' ? 'ГОТОВ' : 'ЕСТЬ ИТОГ';
+  return `<button class="catalog-report-row" type="button" data-open-catalog-report="${escapeHtml(report.run_id)}" data-report-section="${escapeHtml(section)}">
+    <span class="catalog-report-mark" aria-hidden="true">${iconMarkup('search')}</span>
+    <span><strong>${escapeHtml(resultReportName(report))}</strong><small>${escapeHtml(resultReportActionName(report))} · ${escapeHtml(fullDateTime(report.finished_at || report.requested_at) || 'время не указано')}</small></span>
+    <em data-state="${active ? 'active' : 'ready'}">${status}</em>
+  </button>`;
+}
+
+function renderCatalogWorkspace(section) {
+  const root = $(`[data-catalog-workspace="${section}"]`);
+  if (!root || !state.data) return;
+  const allModules = catalogModules(section);
+  const search = $(`[data-catalog-search="${section}"]`);
+  const query = String(search?.value || '').trim().toLowerCase();
+  const modules = allModules.filter((module) => !query || [
+    moduleDisplayName(module),
+    moduleDisplayDescription(module),
+    ...(module.manifest?.actions || []).flatMap((action) => [action.name, action.description]),
+  ].some((value) => String(value || '').toLowerCase().includes(query)));
+  const runs = (state.data.runs || []).filter((run) => recordBelongsToCatalog(run, section));
+  const orderedRuns = [
+    ...runs.filter((run) => ACTIVE_RUN_STATUSES.has(run.status)),
+    ...runs.filter((run) => !ACTIVE_RUN_STATUSES.has(run.status)),
+  ].slice(0, 5);
+  const locked = state.data.vault.exists && !state.data.vault.unlocked;
+  const results = locked ? [] : (state.data.results || []).filter((result) => recordBelongsToCatalog(result, section)).slice(0, 5);
+  const reports = locked ? [] : state.resultReports.filter((report) => recordBelongsToCatalog(report, section)).slice(0, 4);
+  const ready = allModules.filter((module) => module.enabled && module.health === 'ready').length;
+  const active = runs.filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).length;
+  const metrics = [
+    { label: section === 'nft' ? 'NFT-софты' : 'Тестнеты', value: allModules.length, note: 'в этом разделе' },
+    { label: 'Готовы', value: ready, note: 'можно запускать' },
+    { label: 'Сейчас работают', value: active, note: active ? 'видно в нижней панели' : 'очередь свободна' },
+    { label: 'Свежие итоги', value: locked ? '—' : results.length, note: locked ? 'Vault закрыт' : 'в быстрой ленте' },
+  ];
+  $('[data-catalog-metrics]', root).innerHTML = metrics.map((metric) => `<article><small>${escapeHtml(metric.label)}</small><strong>${escapeHtml(metric.value)}</strong><span>${escapeHtml(metric.note)}</span></article>`).join('');
+  const softwareRoot = $('[data-catalog-software-grid]', root);
+  softwareRoot.innerHTML = modules.length
+    ? modules.map((module, index) => softwareCardMarkup(module, index, { scope: section })).join('')
+    : catalogEmptyMarkup(section, { query });
+  const runsRoot = $('[data-catalog-runs]', root);
+  runsRoot.innerHTML = locked
+    ? catalogEmptyMarkup(section, { kind: 'locked' })
+    : orderedRuns.length ? orderedRuns.map((run) => runRow(run)).join('') : catalogEmptyMarkup(section, { kind: 'runs' });
+  const resultsRoot = $('[data-catalog-results]', root);
+  resultsRoot.innerHTML = locked
+    ? catalogEmptyMarkup(section, { kind: 'locked' })
+    : results.length ? results.map(catalogResultRow).join('') : catalogEmptyMarkup(section, { kind: 'results' });
+  const reportsRoot = $('[data-catalog-reports]', root);
+  reportsRoot.innerHTML = locked
+    ? catalogEmptyMarkup(section, { kind: 'locked' })
+    : state.resultReportsLoading && !state.resultReportsLoaded
+      ? '<div class="catalog-inline-empty" data-loading="true"><span aria-hidden="true">••</span><div><strong>Собираем отчёты…</strong><small>Это займёт пару секунд.</small></div></div>'
+      : reports.length ? reports.map((report) => catalogReportRow(report, section)).join('') : catalogEmptyMarkup(section, { kind: 'reports' });
+  decorateAnimatedList(softwareRoot);
+  decorateAnimatedList(runsRoot);
+}
+
+function renderCatalogWorkspaces() {
+  if (!state.data) return;
+  renderCatalogWorkspace('nft');
+  renderCatalogWorkspace('testnet');
+  updateCatalogBatchControls();
+}
+
+function selectCatalogReady(section) {
+  beginCatalogBatchSelection(section);
+  for (const module of catalogModules(section)) {
+    if (module.enabled && module.health === 'ready') state.batchModuleIds.add(module.id);
+  }
+  syncBatchSelectionSurface();
+}
+
+function clearCatalogSelection(section) {
+  for (const module of catalogModules(section)) state.batchModuleIds.delete(module.id);
+  state.batchIdempotencyKey = null;
+  state.batchActionIds.clear();
+  syncBatchSelectionSurface();
+}
+
+function openCatalogBatch(section) {
+  const selected = new Set(catalogSelectedModules(section).map((module) => module.id));
+  for (const moduleId of state.batchModuleIds) {
+    if (!selected.has(moduleId)) state.batchModuleIds.delete(moduleId);
+  }
+  state.catalogBatchScope = section;
+  updateBatchControls();
+  updateCatalogBatchControls();
+  openBatchRunModal();
+}
+
+function setResultCatalogFilter(section = 'all') {
+  state.resultCatalogFilter = catalogSectionMeta[section] ? section : 'all';
+  const banner = $('#result-catalog-filter');
+  if (!banner) return;
+  banner.hidden = state.resultCatalogFilter === 'all';
+  if (!banner.hidden) $('#result-catalog-filter-copy').textContent = `Показаны только результаты: ${catalogSectionMeta[state.resultCatalogFilter].label}`;
+}
+
+async function openCatalogReport(runId, section) {
+  if (!runId) return;
+  setResultCatalogFilter(section);
+  state.selectedResultReportId = runId;
+  showView('results');
+  await loadSelectedResultReport(runId);
 }
 
 function accountReferrerLabel(account) {
@@ -2791,6 +3103,11 @@ function normalizeResultReports(payload) {
     .sort((first, second) => String(second.finished_at || second.requested_at || '').localeCompare(String(first.finished_at || first.requested_at || '')));
 }
 
+function visibleResultReports() {
+  if (state.resultCatalogFilter === 'all') return state.resultReports;
+  return state.resultReports.filter((report) => recordBelongsToCatalog(report, state.resultCatalogFilter));
+}
+
 function resetResultReportPresentation() {
   $('#result-report-workbench').dataset.stale = 'false';
   $('#result-report-title').textContent = 'Отчёт парсинга';
@@ -2815,21 +3132,22 @@ function setResultReportState(title, copy, mode = 'empty') {
 function renderResultReportSelector() {
   const select = $('#result-report-select');
   if (!select) return;
-  if (!state.resultReports.length) {
+  const reports = visibleResultReports();
+  if (!reports.length) {
     select.innerHTML = '<option value="">Пока нет готовых отчётов</option>';
     select.value = '';
     select.disabled = true;
     return;
   }
   select.disabled = false;
-  select.innerHTML = state.resultReports.map((report) => {
+  select.innerHTML = reports.map((report) => {
     const when = ACTIVE_RUN_STATUSES.has(report.run_status)
       ? 'работает сейчас'
       : fullDateTime(report.finished_at || report.requested_at) || 'время не указано';
     return `<option value="${escapeHtml(report.run_id)}">${escapeHtml(resultReportName(report))} · ${escapeHtml(resultReportActionName(report))} · ${escapeHtml(when)}</option>`;
   }).join('');
-  const available = state.resultReports.some((report) => report.run_id === state.selectedResultReportId);
-  if (!available) state.selectedResultReportId = state.resultReports[0].run_id;
+  const available = reports.some((report) => report.run_id === state.selectedResultReportId);
+  if (!available) state.selectedResultReportId = reports[0].run_id;
   select.value = state.selectedResultReportId;
 }
 
@@ -2853,7 +3171,7 @@ function renderResultReportWorkbench() {
     setResultReportState('Собираем список отчётов', 'Это займёт пару секунд.', 'loading');
     return;
   }
-  if (!state.resultReports.length) {
+  if (!visibleResultReports().length) {
     setResultReportState('Готовых таблиц пока нет', 'Запустите у софта действие «Парсинг». Чтобы Hub собрал таблицу, действие должно объявить output account_table и сохранить результат по каждому кошельку.');
     return;
   }
@@ -2880,6 +3198,7 @@ async function loadResultReports({ force = false } = {}) {
   state.resultReportsLoading = true;
   state.resultReportsError = '';
   renderResultReportWorkbench();
+  renderCatalogWorkspaces();
   try {
     const payload = await api('/api/results/overview?limit=500');
     if (generation !== state.resultReportsRequestGeneration || protectedDataEpoch !== state.protectedDataEpoch) return;
@@ -2897,6 +3216,7 @@ async function loadResultReports({ force = false } = {}) {
     if (generation === state.resultReportsRequestGeneration) {
       state.resultReportsLoading = false;
       renderResultReportWorkbench();
+      renderCatalogWorkspaces();
       const refreshAgain = state.resultReportsRefreshPending;
       state.resultReportsRefreshPending = false;
       if (refreshAgain) void loadResultReports({ force: true });
@@ -3173,11 +3493,15 @@ function resultGroupSummary(items) {
 
 function renderResults() {
   if (!state.data) return;
-  const results = Array.isArray(state.data.results) ? state.data.results : [];
+  const allResults = Array.isArray(state.data.results) ? state.data.results : [];
+  const results = state.resultCatalogFilter === 'all'
+    ? allResults
+    : allResults.filter((result) => recordBelongsToCatalog(result, state.resultCatalogFilter));
   const root = $('#results-list');
   const modules = new Map(state.data.modules.map((module) => [module.id, module]));
   const groups = groupResultsByModule(results);
   const locked = state.data.vault.exists && !state.data.vault.unlocked;
+  setResultCatalogFilter(state.resultCatalogFilter);
   root.innerHTML = groups.length
     ? groups.map(({ moduleId, items }, index) => {
       const module = modules.get(moduleId) || {
@@ -3248,6 +3572,12 @@ function renderPatchFeed({ animate = false } = {}) {
     const versionState = patch.version_state || 'unavailable';
     const stateLabel = versionState === 'installed'
       ? 'УСТАНОВЛЕН'
+      : versionState === 'removed_current'
+        ? 'УДАЛЁН'
+        : versionState === 'removed_update_available'
+          ? 'МОЖНО ВЕРНУТЬ'
+          : versionState === 'removed_newer_known'
+            ? 'СТАРАЯ ВЕРСИЯ'
       : versionState === 'update_available'
         ? 'ЕСТЬ ОБНОВЛЕНИЕ'
         : versionState === 'newer_installed'
@@ -3268,6 +3598,12 @@ function renderPatchFeed({ animate = false } = {}) {
           : patch.status === 'ready' ? `Релиз ${patch.release_tag} готов` : 'Описание релиза нужно проверить';
     const reason = versionState === 'installed'
       ? `v${patch.installed_version} уже установлена`
+      : versionState === 'removed_current'
+        ? `v${patch.installed_version} удалена и не может быть установлена повторно`
+        : versionState === 'removed_update_available'
+          ? `После удаления доступна новая v${patch.candidate_version}`
+          : versionState === 'removed_newer_known'
+            ? `Hub уже знает более новую v${patch.installed_version}`
       : versionState === 'update_available'
         ? `Доступно обновление v${patch.installed_version} → v${patch.candidate_version}`
         : versionState === 'newer_installed'
@@ -3278,12 +3614,12 @@ function renderPatchFeed({ animate = false } = {}) {
               ? 'Не получилось надёжно сравнить версии релиза и установленного софта'
               : metadataReason;
     const repositoryUrl = typeof patch.repository_url === 'string' ? patch.repository_url : '';
-    const installLabel = versionState === 'update_available' && patch.candidate_version
+    const installLabel = ['update_available', 'removed_update_available'].includes(versionState) && patch.candidate_version
       ? `Обновить до v${patch.candidate_version}`
       : 'Установить';
     return `
       <article class="patch-feed-card">
-        <div class="patch-feed-card-head"><span class="module-version">${escapeHtml(patch.candidate_version ? `v${patch.candidate_version}` : patch.release_tag || 'БЕЗ ТЕГА')}</span><span class="discovery-state" data-state="${escapeHtml(versionState === 'update_available' ? 'update' : versionState)}">${stateLabel}</span></div>
+        <div class="patch-feed-card-head"><span class="module-version">${escapeHtml(patch.candidate_version ? `v${patch.candidate_version}` : patch.release_tag || 'БЕЗ ТЕГА')}</span><span class="discovery-state" data-state="${escapeHtml(['update_available', 'removed_update_available'].includes(versionState) ? 'update' : versionState)}">${stateLabel}</span></div>
         <h3>${escapeHtml(patch.repository)}</h3>
         <p>${escapeHtml(patch.description || reason)}</p>
         <footer><small>${escapeHtml(reason)} · ${escapeHtml(relativeTime(patch.pushed_at))}</small><span class="patch-feed-actions">${repositoryUrl ? `<a class="button button--quiet" href="${escapeHtml(repositoryUrl)}" target="_blank" rel="noopener noreferrer" data-open-patch-repository="${escapeHtml(repositoryUrl)}">GitHub</a>` : ''}${patch.installable === true ? `<button class="button button--ink specular-button" type="button" data-install-patch="${escapeHtml(patch.asset_url)}">${escapeHtml(installLabel)}</button>` : ''}</span></footer>
@@ -3353,6 +3689,7 @@ function renderAll() {
   renderActivityPanel();
   renderResults();
   renderResultReportWorkbench();
+  renderCatalogWorkspaces();
   renderPatchFeed();
   syncPresentationAssets();
   const configuredOwner = state.data.patch_feed?.owner || '';
@@ -3393,7 +3730,7 @@ function refresh(options = {}) {
         renderAll();
         if (
           (reportsChanged || !state.resultReportsLoaded)
-          && state.view === 'results'
+          && ['results', 'nft', 'testnets'].includes(state.view)
           && nextData?.vault?.unlocked
         ) {
           void loadResultReports({ force: true });
@@ -5700,7 +6037,10 @@ function handleQuickAction(action, origin = document.activeElement) {
 }
 
 function bindEvents() {
-  $$('.nav-item').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
+  $$('.nav-item').forEach((button) => button.addEventListener('click', () => {
+    if (button.dataset.view === 'results') setResultCatalogFilter('all');
+    showView(button.dataset.view);
+  }));
   $$('[data-view-trigger]').forEach((button) => button.addEventListener('click', (event) => {
     event.preventDefault();
     showView(button.dataset.viewTrigger);
@@ -5716,6 +6056,15 @@ function bindEvents() {
     if (state.selectedResultReport) renderSelectedResultReport();
   });
   $('#result-report-export').addEventListener('click', exportSelectedResultReport);
+  $('#result-catalog-filter-clear').addEventListener('click', () => {
+    setResultCatalogFilter('all');
+    state.selectedResultReport = null;
+    renderResults();
+    renderResultReportWorkbench();
+    if (state.resultReports.length) void loadSelectedResultReport(state.selectedResultReportId);
+  });
+  $$('[data-catalog-search]').forEach((input) => input.addEventListener('input', () => renderCatalogWorkspace(input.dataset.catalogSearch)));
+  $$('[data-catalog-refresh-reports]').forEach((button) => button.addEventListener('click', () => loadResultReports({ force: true })));
   $('#theme-button').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
   $$('.patch-radar-blip').forEach((blip) => {
     blip.addEventListener('animationend', () => blip.classList.remove('is-visible'));
@@ -5826,15 +6175,18 @@ function bindEvents() {
   $('#batch-account-concurrency').addEventListener('change', () => syncBatchConcurrency());
   $('#batch-open-button').addEventListener('click', openBatchRunModal);
   $('#batch-select-ready').addEventListener('click', () => {
+    state.catalogBatchScope = 'all';
     state.batchIdempotencyKey = null;
     state.data.modules.filter((module) => module.enabled && module.health === 'ready').forEach((module) => state.batchModuleIds.add(module.id));
     renderSoftware();
+    renderCatalogWorkspaces();
   });
   $('#batch-clear').addEventListener('click', () => {
     state.batchIdempotencyKey = null;
     state.batchModuleIds.clear();
     state.batchActionIds.clear();
     renderSoftware();
+    renderCatalogWorkspaces();
   });
   $('#destructive-form').addEventListener('submit', handleDestructiveSubmit);
   $('#destructive-cancel').addEventListener('click', () => settleDestructiveConfirmation(false));
@@ -5899,12 +6251,13 @@ function bindEvents() {
   document.addEventListener('change', (event) => {
     const checkbox = event.target.closest('input[data-batch-module]');
     if (checkbox) {
+      const scope = checkbox.dataset.batchScope || 'all';
+      if (scope !== 'all') beginCatalogBatchSelection(scope);
+      else state.catalogBatchScope = 'all';
       state.batchIdempotencyKey = null;
       if (checkbox.checked) state.batchModuleIds.add(checkbox.dataset.batchModule);
       else state.batchModuleIds.delete(checkbox.dataset.batchModule);
-      checkbox.closest('.software-card')?.classList.toggle('is-selected', checkbox.checked);
-      updateBatchControls();
-      renderDock();
+      syncBatchSelectionSurface();
       return;
     }
     const action = event.target.closest('select[data-batch-action]');
@@ -5943,6 +6296,28 @@ function bindEvents() {
     if (!target) return;
     if (target.dataset.runModule) openRunModal(target.dataset.runModule);
     if (target.dataset.openRun) void toggleRunDrawer(target.dataset.openRun);
+    if (target.dataset.openCatalogReport) void openCatalogReport(target.dataset.openCatalogReport, target.dataset.reportSection);
+    if (target.dataset.catalogOpenResults) {
+      const section = target.dataset.catalogOpenResults;
+      setResultCatalogFilter(section);
+      const firstReport = state.resultReports.find((report) => recordBelongsToCatalog(report, section));
+      state.selectedResultReport = null;
+      if (firstReport) state.selectedResultReportId = firstReport.run_id;
+      showView('results');
+      if (firstReport) void loadSelectedResultReport(firstReport.run_id);
+    }
+    if (target.dataset.catalogSelectReady) selectCatalogReady(target.dataset.catalogSelectReady);
+    if (target.dataset.catalogClearSelection) clearCatalogSelection(target.dataset.catalogClearSelection);
+    if (target.dataset.catalogOpenBatch) openCatalogBatch(target.dataset.catalogOpenBatch);
+    if (target.hasAttribute('data-catalog-open-patches')) showView('patches');
+    if (target.dataset.catalogClearSearch) {
+      const input = $(`[data-catalog-search="${target.dataset.catalogClearSearch}"]`);
+      if (input) {
+        input.value = '';
+        renderCatalogWorkspace(target.dataset.catalogClearSearch);
+        input.focus();
+      }
+    }
     if (target.dataset.requestRunStop) openRunStopFlow(target.dataset.requestRunStop);
     if (target.dataset.reviewRun) reviewRunAttention(target.dataset.reviewRun, target);
     if (target.dataset.prepareModule) prepareModule(target.dataset.prepareModule, target);
@@ -5972,6 +6347,7 @@ function bindEvents() {
         renderSoftware();
       }
       updateBatchControls();
+      syncBatchSelectionSurface();
       renderDock();
     }
     if (target.dataset.deleteAccount) deleteAccount(target.dataset.deleteAccount);
@@ -6025,13 +6401,19 @@ function bindEvents() {
   });
   document.addEventListener('visibilitychange', () => {
     syncPatchRadarMotion();
-    if (document.visibilityState === 'visible') void refresh();
+    if (document.visibilityState === 'visible') {
+      void refresh();
+      recheckCoreUpdateIfDue();
+    }
   });
+  window.addEventListener('resize', () => updateNavigationState(), { passive: true });
   window.addEventListener('beforeunload', () => {
     stopPatchRadarMotion();
     revokePresentationAssets();
     if (typeof state.coreUpdateUnsubscribe === 'function') state.coreUpdateUnsubscribe();
     state.coreUpdateUnsubscribe = null;
+    if (state.coreUpdateCheckTimer !== null) window.clearInterval(state.coreUpdateCheckTimer);
+    state.coreUpdateCheckTimer = null;
   }, { once: true });
 }
 
@@ -6061,12 +6443,12 @@ async function start() {
     if (document.visibilityState !== 'visible') return;
     const hasActive = state.data?.runs.some((run) => ['queued', 'starting', 'running', 'cancelling'].includes(run.status));
     const activityPanelOpen = !$('#activity-panel').hidden;
-    if (hasActive || state.selectedRunId || activityPanelOpen || state.view === 'results') {
+    if (hasActive || state.selectedRunId || activityPanelOpen || ['results', 'nft', 'testnets'].includes(state.view)) {
       await refresh();
     }
     const selectedReport = selectedResultReportEnvelope();
     if (
-      state.view === 'results'
+      ['results', 'nft', 'testnets'].includes(state.view)
       && state.data?.vault?.unlocked
       && !state.resultReportsLoading
       && ACTIVE_RUN_STATUSES.has(selectedReport.run_status)

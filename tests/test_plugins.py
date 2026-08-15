@@ -20,6 +20,7 @@ from soft_hub.plugins import (
     STRICT_CONTRACT_VERSION,
     PluginError,
     PluginManager,
+    catalog_sections,
     validate_manifest,
 )
 from tests.support import (
@@ -33,7 +34,7 @@ from tests.support import (
 
 
 class ManifestValidationTests(unittest.TestCase):
-    def test_reference_example_is_a_strict_v3_contract(self) -> None:
+    def test_reference_example_is_a_strict_v4_contract(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         manifest = json.loads(
             (project_root / "examples" / "hello-soft" / "hub.plugin.json").read_text(
@@ -44,7 +45,8 @@ class ManifestValidationTests(unittest.TestCase):
         validated = validate_manifest(manifest)
 
         self.assertEqual(validated["contract_version"], STRICT_CONTRACT_VERSION)
-        self.assertEqual(validated["compatibility"]["hub"], ">=0.6.8")
+        self.assertEqual(validated["compatibility"]["hub"], ">=0.6.15")
+        self.assertEqual(validated["catalog"], {"sections": ["general"]})
         profile_preview = next(
             action for action in validated["actions"] if action["id"] == "profile_preview"
         )
@@ -67,7 +69,7 @@ class ManifestValidationTests(unittest.TestCase):
                 self.assertEqual(concurrency["x-ui"]["group"], "Выполнение")
                 self.assertNotIn("account_concurrency", action["options"]["required"])
 
-    def test_strict_v3_rejects_ambiguous_or_unfriendly_options(self) -> None:
+    def test_strict_v4_rejects_ambiguous_or_unfriendly_options(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         source = json.loads(
             (project_root / "examples" / "hello-soft" / "hub.plugin.json").read_text(
@@ -130,7 +132,7 @@ class ManifestValidationTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaisesRegex(PluginError, message):
                 validate_manifest(manifest)
 
-    def test_strict_v3_accepts_sliders_and_validates_dual_range_pairs(self) -> None:
+    def test_strict_v4_accepts_sliders_and_validates_dual_range_pairs(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         source = json.loads(
             (project_root / "examples" / "hello-soft" / "hub.plugin.json").read_text(
@@ -202,6 +204,102 @@ class ManifestValidationTests(unittest.TestCase):
         self.assertEqual(validated, source)
         self.assertIsNot(validated, source)
         self.assertIsNot(validated["runtime"], source["runtime"])
+
+    def test_catalog_contract_is_explicit_bounded_and_legacy_safe(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        source = json.loads(
+            (project_root / "examples" / "hello-soft" / "hub.plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        nft_testnet = copy.deepcopy(source)
+        nft_testnet["catalog"] = {"sections": ["nft", "testnet"]}
+        nft_testnet["permissions"]["chains"] = [11155111]
+        nft_testnet["permissions"]["financial_risk"] = "testnet"
+        action = nft_testnet["actions"][1]
+        nft_testnet["actions"] = [action]
+        action["risk"] = "testnet_write"
+        self.assertEqual(
+            validate_manifest(nft_testnet)["catalog"]["sections"],
+            ["nft", "testnet"],
+        )
+        self.assertEqual(catalog_sections(nft_testnet), ["nft", "testnet"])
+
+        invalid_cases: list[tuple[str, dict[str, object], str]] = []
+        missing = copy.deepcopy(source)
+        missing.pop("catalog")
+        invalid_cases.append(("missing", missing, "требует поле catalog"))
+
+        null_catalog = copy.deepcopy(source)
+        null_catalog["catalog"] = None
+        invalid_cases.append(("null", null_catalog, "catalog должен быть объектом"))
+
+        mixed_general = copy.deepcopy(source)
+        mixed_general["catalog"] = {"sections": ["general", "nft"]}
+        invalid_cases.append(("general mixed", mixed_general, "general нельзя"))
+
+        duplicate = copy.deepcopy(source)
+        duplicate["catalog"] = {"sections": ["nft", "nft"]}
+        invalid_cases.append(("duplicate", duplicate, "повторы"))
+
+        unknown = copy.deepcopy(source)
+        unknown["catalog"] = {"sections": ["gaming"]}
+        invalid_cases.append(("unknown", unknown, "1..2 раздела"))
+
+        testnet_without_section = copy.deepcopy(nft_testnet)
+        testnet_without_section["catalog"] = {"sections": ["nft"]}
+        invalid_cases.append(
+            ("missing testnet placement", testnet_without_section, "требует catalog.sections")
+        )
+
+        mainnet_in_testnet = copy.deepcopy(source)
+        mainnet_in_testnet["catalog"] = {"sections": ["testnet"]}
+        mainnet_in_testnet["permissions"]["chains"] = [1]
+        mainnet_in_testnet["permissions"]["financial_risk"] = "mainnet"
+        mainnet_action = mainnet_in_testnet["actions"][1]
+        mainnet_in_testnet["actions"] = [mainnet_action]
+        mainnet_action["risk"] = "mainnet_write"
+        mainnet_action["confirmation_phrase"] = "CONFIRM MAINNET NFT"
+        invalid_cases.append(
+            ("mainnet in testnet", mainnet_in_testnet, "testnet нельзя")
+        )
+
+        old_contract = copy.deepcopy(source)
+        old_contract["contract_version"] = "SH-SOFTWARE-0.6/3"
+        old_contract["compatibility"]["hub"] = ">=0.6.8"
+        invalid_cases.append(("catalog on v3", old_contract, "только контрактом"))
+
+        legacy_null_catalog = plugin_manifest()
+        legacy_null_catalog["catalog"] = None
+        invalid_cases.append(("null catalog on legacy", legacy_null_catalog, "только контрактом"))
+
+        for label, manifest, message in invalid_cases:
+            with self.subTest(label=label), self.assertRaisesRegex(PluginError, message):
+                validate_manifest(manifest)
+
+        legacy_general = plugin_manifest()
+        legacy_testnet = plugin_manifest(
+            action_risk="testnet_write",
+            account_mode="one_or_more",
+            chains=[11155111],
+        )
+        self.assertEqual(catalog_sections(legacy_general), ["general"])
+        self.assertEqual(catalog_sections(legacy_testnet), ["testnet"])
+        self.assertNotIn("catalog", validate_manifest(legacy_testnet))
+
+    def test_schema_catalog_matches_python_contract(self) -> None:
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "schemas" / "plugin.schema.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn(STRICT_CONTRACT_VERSION, schema["properties"]["contract_version"]["enum"])
+        sections = schema["properties"]["catalog"]["properties"]["sections"]
+        self.assertEqual(sections["items"]["enum"], ["general", "nft", "testnet"])
+        self.assertEqual(sections["minItems"], 1)
+        self.assertEqual(sections["maxItems"], 2)
+        self.assertTrue(sections["uniqueItems"])
 
     def test_accepts_complete_action_specific_secret_contract(self) -> None:
         source = plugin_manifest(secrets=["evm_private_key", "proxy"])
@@ -480,6 +578,7 @@ class ManifestValidationTests(unittest.TestCase):
 
         incompatible = copy.deepcopy(valid)
         incompatible["contract_version"] = "SH-SOFTWARE-0.6/2"
+        incompatible.pop("catalog")
         incompatible["compatibility"]["hub"] = ">=0.6.4"
         with self.assertRaisesRegex(PluginError, ">=0.6.5"):
             validate_manifest(incompatible)
@@ -516,6 +615,7 @@ class ManifestValidationTests(unittest.TestCase):
 
         legacy_fallback = copy.deepcopy(valid)
         legacy_fallback.pop("contract_version")
+        legacy_fallback.pop("catalog")
         legacy_fallback["actions"][0].pop("permissions")
         with self.assertRaisesRegex(PluginError, "explicit action.permissions"):
             validate_manifest(legacy_fallback)
@@ -1003,6 +1103,9 @@ class PluginArchiveTestCase(unittest.TestCase):
         archive = self.archive("github-v1.zip", "1.0.0")
         source = self.github_source("1.0.0")
 
+        with self.assertRaisesRegex(PluginError, "Версия manifest не совпадает"):
+            self.manager.install_github(archive, self.github_source("9.0.0"))
+
         first = self.manager.install_github(archive, source)
         repeated = self.manager.install_github(archive, source)
         version = self.database.one(
@@ -1026,9 +1129,19 @@ class PluginArchiveTestCase(unittest.TestCase):
                     "asset_url": source.download_url,
                     "archive_sha256": version["archive_sha256"],
                     "active_version": "1.0.0",
+                    "version_floor": "1.0.0",
+                    "version_history_valid": True,
+                    "module_removed": False,
                 }
             ],
         )
+
+        rebound = self.github_source(
+            "1.0.0",
+            filename="renamed-1.0.0.softhub.zip",
+        )
+        with self.assertRaisesRegex(PluginError, "source identity.*зафиксирована"):
+            self.manager.install_github(archive, rebound)
 
     def test_github_install_blocks_downgrade_content_reuse_and_identity_collisions(self) -> None:
         v1 = self.archive("github-guard-v1.zip", "1.0.0")
@@ -1108,15 +1221,42 @@ class PluginArchiveTestCase(unittest.TestCase):
             [{"version": "1.0.0"}],
         )
 
-    def test_uninstall_cleans_github_identity_with_managed_versions(self) -> None:
+        v1_5 = self.archive("github-reactivate-v1.5.zip", "1.5.0")
+        with self.assertRaisesRegex(PluginError, "понижение"):
+            self.manager.install_github(v1_5, self.github_source("1.5.0"))
+
+        self.manager.uninstall("test.plugin")
+        with self.assertRaisesRegex(PluginError, "понижение"):
+            self.manager.install_github(v1_5, self.github_source("1.5.0"))
+
+    def test_uninstall_preserves_github_identity_tombstone(self) -> None:
         archive = self.archive("github-uninstall.zip", "1.0.0")
         self.manager.install_github(archive, self.github_source("1.0.0"))
         self.assertEqual(len(self.manager.github_sources()), 1)
 
         self.manager.uninstall("test.plugin")
 
-        self.assertEqual(self.manager.github_sources(), [])
-        self.assertEqual(self.database.all("SELECT * FROM github_module_sources"), [])
+        tombstones = self.manager.github_sources()
+        self.assertEqual(len(tombstones), 1)
+        self.assertIsNone(tombstones[0]["active_version"])
+        self.assertEqual(tombstones[0]["version_floor"], "1.0.0")
+        self.assertIs(tombstones[0]["module_removed"], True)
+        self.assertEqual(len(self.database.all("SELECT * FROM github_module_sources")), 1)
+
+        with self.assertRaisesRegex(PluginError, "не может быть активирована повторно"):
+            self.manager.install_github(archive, self.github_source("1.0.0"))
+
+        other_repository = self.github_source(
+            "2.0.0",
+            owner="sprintray",
+            repository="other.patch",
+            filename="test-plugin-2.0.0.softhub.zip",
+        )
+        with self.assertRaisesRegex(PluginError, "другому GitHub repository"):
+            self.manager.install_github(
+                self.archive("github-other-repository.zip", "2.0.0"),
+                other_repository,
+            )
 
     def test_failed_install_removes_its_own_target_and_staging_directory(self) -> None:
         archive = self.archive("db-failure.zip")
@@ -1145,7 +1285,7 @@ class PluginArchiveTestCase(unittest.TestCase):
         self.assertEqual(marker.read_text(encoding="utf-8"), "preexisting deterministic data")
         self.assertIsNone(self.manager.get("test.plugin"))
 
-    def test_uninstall_removes_every_version_and_runtime_but_preserves_history(self) -> None:
+    def test_uninstall_removes_code_but_preserves_lineage_and_history(self) -> None:
         v1 = self.archive("uninstall-v1.zip", "1.0.0")
         v2 = self.archive("uninstall-v2.zip", "2.0.0")
         self.manager.install(v1)
@@ -1180,8 +1320,14 @@ class PluginArchiveTestCase(unittest.TestCase):
         self.assertIsNone(self.manager.get("test.plugin"))
         self.assertEqual(self.manager.list(), [])
         self.assertEqual(
-            self.database.all("SELECT * FROM module_versions WHERE module_id='test.plugin'"),
-            [],
+            self.database.all(
+                "SELECT version,active FROM module_versions "
+                "WHERE module_id='test.plugin' ORDER BY version"
+            ),
+            [
+                {"version": "1.0.0", "active": 0},
+                {"version": "2.0.0", "active": 0},
+            ],
         )
         tombstone = self.database.one("SELECT * FROM modules WHERE id='test.plugin'")
         assert tombstone is not None
@@ -1191,11 +1337,15 @@ class PluginArchiveTestCase(unittest.TestCase):
         self.assertIsNotNone(self.database.one("SELECT * FROM runs WHERE id='historical-run'"))
         self.assertIsNotNone(self.database.one("SELECT * FROM results WHERE id='historical-result'"))
 
-        reinstalled = self.manager.install(v1)
-        self.assertEqual(reinstalled["version"], "1.0.0")
+        with self.assertRaisesRegex(PluginError, "понижение"):
+            self.manager.install(v1)
+
+        v3 = self.archive("uninstall-v3.zip", "3.0.0")
+        reinstalled = self.manager.install(v3)
+        self.assertEqual(reinstalled["version"], "3.0.0")
         self.assertTrue(reinstalled["enabled"])
         self.assertEqual(reinstalled["health"], "ready")
-        self.assertTrue((plugin_root / "1.0.0").is_dir())
+        self.assertTrue((plugin_root / "3.0.0").is_dir())
 
     def test_uninstall_refuses_only_active_runs(self) -> None:
         self.manager.install(self.archive("uninstall-blocked.zip"))
@@ -1241,6 +1391,36 @@ class PluginArchiveTestCase(unittest.TestCase):
         self.assertEqual(marker.read_text(encoding="utf-8"), "outside Hub plugin storage")
         self.assertTrue((self.paths.plugins / "test.plugin" / "1.0.0").is_dir())
         self.assertEqual(list(self.paths.staging.iterdir()), [])
+
+    def test_legacy_noncanonical_version_can_be_removed_but_never_updated(self) -> None:
+        self.manager.install(self.archive("legacy-path.zip", "1.0.0"))
+        plugin_root = self.paths.plugins / "test.plugin"
+        legacy_path = plugin_root / "01.0.0"
+        os.replace(plugin_root / "1.0.0", legacy_path)
+        self.database.execute(
+            "UPDATE module_versions SET version='01.0.0',path=? "
+            "WHERE module_id='test.plugin' AND version='1.0.0'",
+            (str(legacy_path),),
+        )
+        self.database.execute(
+            "UPDATE modules SET version='01.0.0',active_path=? "
+            "WHERE id='test.plugin'",
+            (str(legacy_path),),
+        )
+
+        with self.assertRaisesRegex(PluginError, "История версий.*повреждена"):
+            self.manager.install(self.archive("legacy-path-update.zip", "2.0.0"))
+
+        removed = self.manager.uninstall("test.plugin")
+        self.assertTrue(removed["removed"])
+        self.assertFalse(plugin_root.exists())
+        self.assertEqual(
+            self.database.one(
+                "SELECT version,active FROM module_versions "
+                "WHERE module_id='test.plugin'"
+            ),
+            {"version": "01.0.0", "active": 0},
+        )
 
     def test_uninstall_rejects_a_symlinked_plugins_root_without_touching_target(self) -> None:
         self.manager.install(self.archive("uninstall-root-symlink.zip"))
