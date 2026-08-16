@@ -27,6 +27,7 @@ _protocol_stdout = sys.stdout
 _write_lock = threading.Lock()
 _sequence = 0
 _cancelled = threading.Event()
+_cancel_notice_emitted = threading.Event()
 
 
 class _SanitizingBinaryStream:
@@ -125,8 +126,26 @@ def emit(event: dict[str, Any]) -> None:
 
 
 def request_cancel(_signum: int, _frame: Any) -> None:
-    if not _cancelled.is_set():
-        _cancelled.set()
+    # A Python signal handler can interrupt `emit()` while its non-reentrant
+    # lock is held. Doing protocol I/O here could therefore deadlock the
+    # bootstrap exactly when Stop is pressed. Keep the handler signal-safe at
+    # Python level; the monitor thread emits the user-facing notice.
+    _cancelled.set()
+
+
+def _watch_cancellation(cancel_path: Path | None) -> None:
+    while not _cancelled.wait(timeout=0.1):
+        if cancel_path is None:
+            continue
+        try:
+            requested = cancel_path.is_file()
+        except OSError:
+            requested = False
+        if requested:
+            _cancelled.set()
+            break
+    if not _cancel_notice_emitted.is_set():
+        _cancel_notice_emitted.set()
         emit(
             {
                 "type": "warning",
@@ -156,7 +175,28 @@ def main() -> int:
         emit({"type": "failed", "level": "error", "message": "Контекст запуска отсутствует или слишком велик", "data": {}})
         return 2
     try:
-        context = decode_context(frame.decode("utf-8"), emit, _cancelled)
+        payload = frame.decode("utf-8")
+        raw_context = json.loads(payload)
+        raw_cancel_path = raw_context.get("cancel_path")
+        cancel_path = (
+            Path(raw_cancel_path)
+            if isinstance(raw_cancel_path, str) and raw_cancel_path
+            else None
+        )
+        context = decode_context(payload, emit, _cancelled)
+        if cancel_path is not None:
+            try:
+                if cancel_path.is_file():
+                    _cancelled.set()
+            except OSError:
+                pass
+        context.check_cancelled()
+        threading.Thread(
+            target=_watch_cancellation,
+            args=(cancel_path,),
+            name="soft-hub-cancel-watch",
+            daemon=True,
+        ).start()
         # Keep the protocol on the original stdout, but prevent accidental
         # print/logging (including stderr.buffer writes) from racing the host's
         # in-memory protect_secret control frame with an unredacted value.
@@ -167,6 +207,7 @@ def main() -> int:
         function = getattr(module, function_name)
         if not callable(function):
             raise TypeError("Entry point не является callable")
+        context.check_cancelled()
         emit(
             {
                 "type": "started",

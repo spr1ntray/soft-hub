@@ -186,7 +186,6 @@ class StaticDOMTests(unittest.TestCase):
                 "export-modal",
                 "quick-run-modal",
                 "batch-run-modal",
-                "destructive-modal",
                 "referral-modal",
                 "run-modal",
             },
@@ -764,6 +763,10 @@ class StaticDOMTests(unittest.TestCase):
         ]
         self.assertNotIn("/stop", stop_entry)
         self.assertNotIn("/force-stop", stop_entry)
+        self.assertIn("requestRunStop(runId, 'auto')", stop_entry)
+        self.assertIn("stopRequestRunIds: new Set()", self.javascript)
+        self.assertIn("state.stopRequestRunIds.has(requestedRunId)", self.javascript)
+        self.assertIn("run.safe_stop === true && run.status !== 'cancelling'", self.javascript)
         for stage_id in (
             "preflight", "fill", "partially_completed", "action_failed",
             "external_state_unknown", "preflight_failed", "external_reconciliation",
@@ -1079,7 +1082,6 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("hidden", by_id["batch-run-modal"])
         self.assertEqual(by_id["batch-run-form"].get("novalidate"), None)
         self.assertEqual(by_id["batch-account-policy"].get("id"), "batch-account-policy")
-        self.assertEqual(by_id["batch-risk-checkbox"].get("type"), "checkbox")
         self.assertEqual(by_id["batch-run-error"].get("role"), "alert")
         self.assertEqual(by_id["batch-run-submit"].get("type"), "submit")
 
@@ -1091,6 +1093,7 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("if (action.risk === 'mainnet_write')", self.javascript)
         self.assertIn("window.crypto.randomUUID()", self.javascript)
         self.assertIn("jsonPost('/api/runs/batch'", self.javascript)
+        self.assertNotIn('id="batch-risk-checkbox"', self.html)
         self.assertIn("$('#batch-run-form').addEventListener('submit', handleBatchRunSubmit)", self.javascript)
         self.assertIn("function actionSecretPermissions(module, action)", self.javascript)
         self.assertIn("Object.prototype.hasOwnProperty.call(action, 'permissions')", self.javascript)
@@ -1116,6 +1119,7 @@ class StaticDOMTests(unittest.TestCase):
             self.javascript.index("async function handleBatchRunSubmit("):
             self.javascript.index("function openQuickRun(")
         ]
+        self.assertNotIn("acknowledgement:", batch_submit)
         for source in (open_run, batch_issue, batch_open):
             self.assertIn("actionSecretPermissions(", source)
         self.assertNotIn("external_write", batch_issue)
@@ -1127,20 +1131,21 @@ class StaticDOMTests(unittest.TestCase):
         self.assertNotIn("state.batchIdempotencyKey = null", catch_body)
         self.assertIn("state.batchIdempotencyKey = null", batch_submit[:batch_submit.index("} catch (failure) {")])
 
-    def test_destructive_module_delete_and_force_stop_contract(self) -> None:
+    def test_actions_start_without_confirmation_gate(self) -> None:
         by_id: dict[str, dict[str, str | None]] = {
             str(attrs["id"]): attrs
             for _, attrs in self.dom.elements
             if attrs.get("id")
         }
-        self.assertEqual(by_id["destructive-modal"].get("role"), "dialog")
-        self.assertEqual(by_id["destructive-modal"].get("aria-modal"), "true")
-        self.assertIn("hidden", by_id["destructive-modal"])
-        self.assertEqual(by_id["destructive-phrase"].get("autocomplete"), "off")
-        self.assertEqual(by_id["destructive-phrase"].get("spellcheck"), "false")
-        self.assertEqual(by_id["destructive-error"].get("role"), "alert")
-        self.assertEqual(by_id["destructive-cancel"].get("type"), "button")
-        self.assertEqual(by_id["destructive-submit"].get("type"), "submit")
+        for removed_id in (
+            "destructive-modal",
+            "destructive-phrase",
+            "export-acknowledgement",
+            "risk-checkbox",
+            "mainnet-phrase",
+            "batch-risk-checkbox",
+        ):
+            self.assertNotIn(removed_id, by_id)
 
         self.assertEqual(by_id["drawer-stop-note"].get("role"), "status")
         self.assertIn("hidden", by_id["drawer-stop-note"])
@@ -1152,8 +1157,7 @@ class StaticDOMTests(unittest.TestCase):
         self.assertEqual(by_id["drawer-force-stop"].get("type"), "button")
         self.assertIn("button--danger", str(by_id["drawer-force-stop"].get("class")))
 
-        self.assertIn("function requestDestructiveConfirmation(", self.javascript)
-        self.assertIn("if (request.phrase && value !== request.phrase)", self.javascript)
+        self.assertNotIn("requestDestructiveConfirmation", self.javascript)
         self.assertNotRegex(self.javascript, r"window\.(?:confirm|prompt)\s*\(")
         self.assertIn("function deleteModule(moduleId, button)", self.javascript)
         self.assertIn('data-delete-module="${escapeHtml(module.id)}"', self.javascript)
@@ -1162,16 +1166,35 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn("if (target.dataset.deleteModule) deleteModule(", self.javascript)
 
         self.assertIn("function forceStopSelectedRun()", self.javascript)
-        self.assertIn("phrase: 'FORCE STOP'", self.javascript)
-        self.assertIn("/force-stop`, { acknowledgement: 'FORCE STOP' }", self.javascript)
+        self.assertIn("/force-stop`, {})", self.javascript)
         self.assertIn("$('#drawer-force-stop').addEventListener('click', forceStopSelectedRun)", self.javascript)
-        self.assertNotIn("phrase: 'RECONCILED'", self.javascript)
-        self.assertNotIn("acknowledgement: 'RECONCILED'", self.javascript)
+        self.assertNotIn("acknowledgement", self.javascript)
         self.assertIn("function reviewSelectedRunFailure()", self.javascript)
         self.assertIn("/review`, {}", self.javascript)
         self.assertIn("$('#drawer-review').addEventListener('click', reviewSelectedRunFailure)", self.javascript)
-        self.assertIn("Hub сразу завершит весь процесс", self.javascript)
-        self.assertIn("аккаунты сразу освободятся", self.javascript)
+        self.assertIn("async function clearCapsolver()", self.javascript)
+        self.assertIn("async function clearAdsPower()", self.javascript)
+
+        export_submit = self.javascript[
+            self.javascript.index("async function handleExportSubmit("):
+            self.javascript.index("async function saveCapsolver(")
+        ]
+        self.assertIn("password: passwordInput.value", export_submit)
+        self.assertNotIn("acknowledgement", export_submit)
+        self.assertIn("setBusy(submit, false)", export_submit)
+
+        capsolver_save = self.javascript[
+            self.javascript.index("async function saveCapsolver("):
+            self.javascript.index("async function clearCapsolver(")
+        ]
+        self.assertIn("const button = $('#capsolver-save')", capsolver_save)
+        self.assertIn("setBusy(button, false)", capsolver_save)
+        self.assertNotIn("setBusy(submit", capsolver_save)
+
+        self.assertNotIn("refresh-button", by_id)
+        self.assertNotIn("#refresh-button", self.javascript)
+        self.assertIn("document.addEventListener('visibilitychange'", self.javascript)
+        self.assertIn("state.pollHandle = window.setInterval", self.javascript)
 
     def test_software_card_has_only_power_and_delete_secondary_controls(self) -> None:
         renderer = self.javascript[
@@ -1489,7 +1512,7 @@ class StaticDOMTests(unittest.TestCase):
         self.assertEqual(by_id["core-update-progress-bar"].get("max"), "100")
         self.assertEqual(by_id["core-update-primary"].get("aria-describedby"), "core-update-copy")
         self.assertIn("Проверить обновления", self.html)
-        self.assertIn("Скачивание и установка начнутся только после вашего разрешения", self.html)
+        self.assertIn("Скачивание начнётся по кнопке, установка — отдельным нажатием", self.html)
         self.assertIn("function renderCoreUpdateGuide()", self.javascript)
         self.assertIn("function initializeCoreUpdater()", self.javascript)
         self.assertIn("const CORE_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000", self.javascript)
@@ -1505,7 +1528,12 @@ class StaticDOMTests(unittest.TestCase):
         self.assertIn('settingsNav.dataset.updateAvailable', self.javascript)
         self.assertIn("window.softHubDesktop", self.javascript)
         self.assertIn("onStateChanged", self.javascript)
-        self.assertIn("await requestDestructiveConfirmation", self.javascript)
+        install_update = self.javascript[
+            self.javascript.index("async function installCoreUpdate("):
+            self.javascript.index("function handleCoreUpdateAction(")
+        ]
+        self.assertNotIn("requestDestructiveConfirmation", install_update)
+        self.assertIn("await updater.install()", install_update)
         self.assertIn("openActivityPanel('active'", self.javascript)
         self.assertIn("state.data.app.platform", self.javascript)
         self.assertIn("перетащите Soft Hub в Applications", self.javascript)
@@ -1577,6 +1605,25 @@ class StaticDOMTests(unittest.TestCase):
         self.assertEqual(by_id["capsolver-key"].get("minlength"), "4")
         self.assertIn("API-ключ один на весь Hub", self.html)
         self.assertIn("data-open-account-connections", self.html)
+        accounts_markup = self.html[
+            self.html.index('<section id="view-accounts"'):
+            self.html.index('<section id="view-results"')
+        ]
+        settings_markup = self.html[
+            self.html.index('<section id="view-settings"'):
+            self.html.index('<nav class="quick-dock"')
+        ]
+        self.assertEqual(self.html.count('id="capsolver-form"'), 1)
+        self.assertIn('id="capsolver-form"', accounts_markup)
+        self.assertIn('id="adspower-form"', accounts_markup)
+        self.assertNotIn('id="capsolver-form"', settings_markup)
+        self.assertIn("data-resource-connections", self.javascript)
+        resource_navigation = self.javascript[
+            self.javascript.index("$('[data-resource-connections]', root)"):
+            self.javascript.index("$('[data-resource-import]', root)")
+        ]
+        self.assertIn("showView('accounts')", resource_navigation)
+        self.assertNotIn("showView('settings')", resource_navigation)
         self.assertEqual(by_id["referral-modal"].get("aria-modal"), "true")
         self.assertEqual(by_id["referral-chain-preview"].get("aria-live"), "polite")
         self.assertIn("referral-graph", by_id)
@@ -1787,6 +1834,7 @@ class StaticDOMTests(unittest.TestCase):
                 "scrollbar-thumb-active",
             ):
                 self.assertIn(f"--{token}:", palette)
+            self.assertIn("--scrollbar-track: transparent", palette)
 
         firefox_rule = re.search(r":where\(\*\)\s*\{(?P<body>.*?)\n\}", self.css, re.DOTALL)
         webkit_rule = re.search(
@@ -1813,7 +1861,7 @@ class StaticDOMTests(unittest.TestCase):
             "scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track)",
             firefox_rule.group("body"),
         )
-        for declaration in ("width: 12px", "height: 12px"):
+        for declaration in ("width: 10px", "height: 10px"):
             self.assertIn(declaration, webkit_rule.group("body"))
         for declaration in (
             "min-width: 44px",
@@ -1824,6 +1872,8 @@ class StaticDOMTests(unittest.TestCase):
         ):
             self.assertIn(declaration, thumb_rule.group("body"))
         self.assertIn("background-color: var(--scrollbar-track)", track_rule.group("body"))
+        self.assertIn("border: 0", track_rule.group("body"))
+        self.assertNotIn("background-clip", track_rule.group("body"))
         self.assertIn("::-webkit-scrollbar-thumb:hover", self.css)
         self.assertIn("background-color: var(--scrollbar-thumb-hover)", self.css)
         self.assertIn("::-webkit-scrollbar-thumb:active", self.css)
@@ -1832,18 +1882,19 @@ class StaticDOMTests(unittest.TestCase):
 
         html_rule = re.search(r"html\s*\{(?P<body>.*?)\n\}", self.css, re.DOTALL)
         gutter_rule = re.search(
-            r":where\(\s*\.modal,(?P<selectors>.*?)\)\s*\{(?P<body>.*?)\n\}",
+            r":where\(\s*(?P<selectors>\.referral-inspector,.*?)\)\s*\{(?P<body>.*?)\n\}",
             self.css,
             re.DOTALL,
         )
         self.assertIsNotNone(html_rule)
         self.assertIsNotNone(gutter_rule)
-        self.assertIn("scrollbar-gutter: stable", html_rule.group("body"))
+        self.assertNotIn("scrollbar-gutter", html_rule.group("body"))
         self.assertIn("scrollbar-gutter: stable", gutter_rule.group("body"))
         for selector in (
             ".referral-inspector",
             ".batch-run-list",
             ".account-selector",
+            "#run-form",
             ".drawer",
             ".drawer-account-table-wrap",
             ".event-console",
@@ -1851,6 +1902,33 @@ class StaticDOMTests(unittest.TestCase):
             ".result-report-table-scroll",
         ):
             self.assertIn(selector, gutter_rule.group("selectors"))
+        self.assertNotIn(".modal", gutter_rule.group("selectors"))
+
+        modal_track_rule = re.search(
+            r"\.modal::-webkit-scrollbar-track\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        run_modal_rule = re.search(r"#run-modal\s*\{(?P<body>.*?)\n\}", self.css, re.DOTALL)
+        run_form_rule = re.search(
+            r"#run-modal\s*>\s*#run-form\s*\{(?P<body>.*?)\n\}",
+            self.css,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(modal_track_rule)
+        self.assertIsNotNone(run_modal_rule)
+        self.assertIsNotNone(run_form_rule)
+        self.assertIn("margin-block: 18px", modal_track_rule.group("body"))
+        self.assertIn("overflow: hidden", run_modal_rule.group("body"))
+        self.assertIn("scrollbar-gutter: auto", run_modal_rule.group("body"))
+        for declaration in (
+            "min-height: 0",
+            "overflow-x: hidden",
+            "overflow-y: auto",
+            "overscroll-behavior: contain",
+            "scrollbar-gutter: stable",
+        ):
+            self.assertIn(declaration, run_form_rule.group("body"))
 
         more_contrast = self.css[
             self.css.index("@media (prefers-contrast: more)"):

@@ -1775,9 +1775,7 @@ def run(context):
 
         with self.assertRaisesRegex(RunError, "безопасную остановку"):
             self.runs.stop(run_id)
-        with self.assertRaisesRegex(RunError, "FORCE STOP"):
-            self.runs.force_stop(run_id, "")
-        stopping = self.runs.force_stop(run_id, "FORCE STOP")
+        stopping = self.runs.force_stop(run_id)
         self.assertEqual(stopping["status"], "cancelling")
         final = wait_until(
             lambda: (
@@ -1796,6 +1794,310 @@ def run(context):
         self.assertTrue(
             any("принудительную остановку" in event["message"] for event in events)
         )
+
+    def test_safe_stop_reaches_bootstrap_without_an_os_signal(self) -> None:
+        manifest = plugin_manifest(
+            plugin_id="runner.cooperative-marker",
+            safe_stop=True,
+        )
+        self.install_plugin(
+            "import time\n"
+            "def run(context):\n"
+            "    while not context.cancelled:\n"
+            "        time.sleep(0.02)\n"
+            "    context.check_cancelled()\n",
+            manifest,
+        )
+        started = self.runs.start("runner.cooperative-marker", "run", [])
+        run_id = str(started["id"])
+        wait_until(lambda: self.runs.get(run_id)["status"] == "running", timeout=5)
+
+        # This models Windows, where a GUI-launched process has no dependable
+        # console signal. The run must still observe the cancellation marker.
+        with mock.patch.object(self.runs, "_signal_process"):
+            stopping = self.runs.stop(run_id)
+            self.assertEqual(stopping["status"], "cancelling")
+            final = self.wait_for_terminal(run_id)
+
+        self.assertEqual(final["status"], "cancelled")
+        self.assertIsNone(final["error"])
+        self.assertTrue(
+            (self.paths.runs / run_id / ".soft-hub-cancel").is_file()
+        )
+        self.assertTrue(
+            any(
+                event["event_type"] == "host"
+                and "мягкую остановку" in event["message"]
+                for event in self.runs.events(run_id)
+            )
+        )
+
+    def test_uncooperative_safe_stop_escalates_to_force_kill(self) -> None:
+        manifest = plugin_manifest(
+            plugin_id="runner.soft-stop-escalation",
+            safe_stop=True,
+        )
+        self.install_plugin(
+            "import signal, time\n"
+            "from pathlib import Path\n"
+            "def run(context):\n"
+            "    signal.signal(signal.SIGTERM, lambda *_args: None)\n"
+            "    Path(context.scratch_dir, 'ready').write_text('ready')\n"
+            "    while True:\n"
+            "        time.sleep(1)\n",
+            manifest,
+        )
+        started = self.runs.start("runner.soft-stop-escalation", "run", [])
+        run_id = str(started["id"])
+        wait_until(lambda: self.runs.get(run_id)["status"] == "running", timeout=5)
+        wait_until(
+            (self.paths.runs / run_id / "scratch" / "ready").is_file,
+            timeout=5,
+        )
+        process = self.runs._processes[run_id]
+
+        self.runs.stop(run_id)
+        # Exercise the production grace callback with a short deterministic
+        # deadline instead of making the suite wait ten seconds.
+        self.runs._force_after_grace(run_id, process, 0.05)
+        final = self.wait_for_terminal(run_id)
+
+        self.assertEqual(final["status"], "cancelled")
+        self.assertEqual(final["error"], "process_force_killed")
+        self.assertTrue(
+            any("не остановился вовремя" in event["message"] for event in self.runs.events(run_id))
+        )
+
+    def test_accepted_safe_stop_wins_a_racing_completed_frame(self) -> None:
+        manifest = plugin_manifest(
+            plugin_id="runner.stop-completion-race",
+            safe_stop=True,
+        )
+        self.install_plugin(
+            "import time\n"
+            "from pathlib import Path\n"
+            "def run(context):\n"
+            "    gate = Path(context.scratch_dir) / 'finish'\n"
+            "    while not gate.exists():\n"
+            "        time.sleep(0.01)\n"
+            "    return {'late': True}\n",
+            manifest,
+        )
+        started = self.runs.start("runner.stop-completion-race", "run", [])
+        run_id = str(started["id"])
+        wait_until(lambda: self.runs.get(run_id)["status"] == "running", timeout=5)
+
+        # Hold both delivery mechanisms so the plugin can race a completed
+        # event after Stop has already been accepted by the manager.
+        with (
+            mock.patch.object(self.runs, "_request_cooperative_cancel"),
+            mock.patch.object(self.runs, "_signal_process"),
+        ):
+            self.assertEqual(self.runs.stop(run_id)["status"], "cancelling")
+            (self.paths.runs / run_id / "scratch" / "finish").write_text(
+                "finish\n",
+                encoding="utf-8",
+            )
+            final = self.wait_for_terminal(run_id)
+
+        self.assertEqual(final["status"], "cancelled")
+        self.assertIsNone(final["error"])
+
+    def test_completion_before_stop_update_cannot_resurrect_terminal_run(self) -> None:
+        manifest = plugin_manifest(
+            plugin_id="runner.finish-before-stop-update",
+            safe_stop=True,
+        )
+        self.install_plugin(
+            "import time\n"
+            "from pathlib import Path\n"
+            "def run(context):\n"
+            "    gate = Path(context.scratch_dir) / 'finish'\n"
+            "    while not gate.exists():\n"
+            "        time.sleep(0.01)\n"
+            "    return {'finished': True}\n",
+            manifest,
+        )
+        started = self.runs.start("runner.finish-before-stop-update", "run", [])
+        run_id = str(started["id"])
+        running = wait_until(
+            lambda: (
+                current
+                if (current := self.runs.get(run_id))["status"] == "running"
+                else None
+            ),
+            timeout=5,
+        )
+        original_get = self.runs.get
+        first_projection = True
+
+        def stale_first_projection(requested_run_id: str) -> dict[str, object] | None:
+            nonlocal first_projection
+            if first_projection:
+                first_projection = False
+                (self.paths.runs / run_id / "scratch" / "finish").write_text(
+                    "finish\n",
+                    encoding="utf-8",
+                )
+                wait_until(
+                    lambda: (
+                        current
+                        if (current := original_get(run_id))["status"] == "succeeded"
+                        else None
+                    ),
+                    timeout=5,
+                )
+                # Simulate the stale projection that stop() fetched immediately
+                # before the worker committed its terminal state.
+                return dict(running)
+            return original_get(requested_run_id)
+
+        with mock.patch.object(
+            self.runs,
+            "get",
+            side_effect=stale_first_projection,
+        ):
+            stopped = self.runs.stop(run_id)
+
+        self.assertEqual(stopped["status"], "succeeded")
+        self.assertEqual(original_get(run_id)["status"], "succeeded")
+
+    @unittest.skipIf(os.name == "nt", "POSIX containment ordering regression")
+    def test_force_stop_keeps_account_lease_until_tree_is_contained(self) -> None:
+        self.vault.create(TEST_MASTER_PASSWORD)
+        self.vault.import_records(
+            [
+                ImportRecord(
+                    TEST_PRIVATE_KEY_A,
+                    "containment.test:48080:user:pass",
+                    "containment@example.test",
+                )
+            ]
+        )
+        account_id = str(self.vault.list_accounts()[0]["id"])
+        manifest = plugin_manifest(
+            plugin_id="runner.containment-order",
+            action_risk="testnet_write",
+            account_mode="one_or_more",
+            chains=[111],
+            safe_stop=False,
+        )
+        self.install_plugin(
+            "import time\n"
+            "def run(context):\n"
+            "    time.sleep(30)\n",
+            manifest,
+        )
+        containment_entered = threading.Event()
+        allow_containment = threading.Event()
+        self.addCleanup(allow_containment.set)
+
+        def delayed_containment(_process_group_id: int, timeout: float) -> bool:
+            containment_entered.set()
+            return allow_containment.wait(timeout=max(5.0, timeout))
+
+        with mock.patch.object(
+            self.runs,
+            "_wait_for_posix_process_group",
+            side_effect=delayed_containment,
+        ):
+            started = self.runs.start(
+                "runner.containment-order",
+                "run",
+                [account_id],
+            )
+            run_id = str(started["id"])
+            wait_until(lambda: self.runs.get(run_id)["status"] == "running", timeout=5)
+            self.runs.force_stop(run_id)
+            self.assertTrue(containment_entered.wait(timeout=5))
+            self.assertEqual(self.runs.get(run_id)["status"], "cancelling")
+            self.assertIsNotNone(
+                self.database.one(
+                    "SELECT run_id FROM account_leases WHERE run_id=?",
+                    (run_id,),
+                )
+            )
+            allow_containment.set()
+            final = self.wait_for_terminal(run_id)
+
+        self.assertEqual(final["status"], "cancelled")
+        self.assertEqual(
+            self.database.all("SELECT * FROM account_leases WHERE run_id=?", (run_id,)),
+            [],
+        )
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group regression")
+    def test_force_stop_kills_child_and_grandchild_after_bootstrap(self) -> None:
+        manifest = plugin_manifest(
+            plugin_id="runner.force-descendant",
+            safe_stop=False,
+        )
+        self.install_plugin(
+            "import subprocess, sys, time\n"
+            "from pathlib import Path\n"
+            "def run(context):\n"
+            "    grandchild_file = Path(context.scratch_dir, 'grandchild.pid')\n"
+            "    child_code = (\"import pathlib,subprocess,sys,time;\"\n"
+            "        \"grand=subprocess.Popen([sys.executable,'-c',\"\n"
+            "        \"'import time; time.sleep(30)']);\"\n"
+            "        \"pathlib.Path(sys.argv[1]).write_text(str(grand.pid));\"\n"
+            "        \"time.sleep(30)\")\n"
+            "    child = subprocess.Popen([sys.executable, '-c', child_code, "
+            "str(grandchild_file)])\n"
+            "    Path(context.scratch_dir, 'child.pid').write_text(str(child.pid))\n"
+            "    time.sleep(30)\n",
+            manifest,
+        )
+        started = self.runs.start("runner.force-descendant", "run", [])
+        run_id = str(started["id"])
+        child_file = self.paths.runs / run_id / "scratch" / "child.pid"
+        grandchild_file = self.paths.runs / run_id / "scratch" / "grandchild.pid"
+        wait_until(child_file.is_file, timeout=5)
+        wait_until(grandchild_file.is_file, timeout=5)
+        child_pid = int(child_file.read_text(encoding="utf-8"))
+        grandchild_pid = int(grandchild_file.read_text(encoding="utf-8"))
+
+        def process_is_gone(pid: int) -> bool:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                return False
+            return False
+
+        def kill_descendants_if_needed() -> None:
+            for pid in (child_pid, grandchild_pid):
+                if process_is_gone(pid):
+                    continue
+                try:
+                    os.kill(pid, 9)
+                except ProcessLookupError:
+                    pass
+
+        self.addCleanup(kill_descendants_if_needed)
+        self.runs.force_stop(run_id)
+        final = self.wait_for_terminal(run_id)
+        self.assertEqual(final["status"], "cancelled")
+        wait_until(
+            lambda: process_is_gone(child_pid) and process_is_gone(grandchild_pid),
+            timeout=5,
+        )
+
+    def test_windows_job_is_terminated_after_bootstrap_leader_exits(self) -> None:
+        run_id = "windows-job-regression"
+        process = mock.Mock(pid=4242)
+        process.poll.return_value = 0
+        process_job = mock.Mock()
+        process_job.terminate.return_value = True
+        self.runs._process_jobs[run_id] = process_job
+        self.addCleanup(self.runs._process_jobs.pop, run_id, None)
+
+        with mock.patch("soft_hub.runner.os.name", "nt"):
+            self.runs._signal_process(run_id, process, force=True)
+
+        process_job.terminate.assert_called_once_with()
+        process.kill.assert_not_called()
 
     def test_queued_safe_and_force_stop_finish_before_slot_and_release_write_lease(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
@@ -1923,9 +2225,7 @@ def run(context):
         run_id = str(started["id"])
         wait_until(lambda: self.runs.get(run_id)["status"] == "running", timeout=5)
 
-        with self.assertRaisesRegex(RunError, "FORCE STOP"):
-            self.runs.force_stop(run_id, "force stop")
-        self.runs.force_stop(run_id, "FORCE STOP")
+        self.runs.force_stop(run_id)
         final = wait_until(
             lambda: (
                 current

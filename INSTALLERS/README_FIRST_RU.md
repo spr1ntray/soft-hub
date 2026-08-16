@@ -1,18 +1,18 @@
 # Сначала откройте этот файл
 
-## Актуальный релиз — 0.6.16
+## Актуальный опубликованный релиз — 0.6.18
 
-- **[Скачать Soft Hub для Windows 10/11 x64](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.16/Soft-Hub-0.6.16-x64.exe)**
-- **[Скачать Soft Hub для Mac с Apple Silicon](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.16/Soft-Hub-0.6.16-arm64.dmg)**
+- **[Скачать Soft Hub для Windows 10/11 x64](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.18/Soft-Hub-0.6.18-x64.exe)**
+- **[Скачать Soft Hub для Mac с Apple Silicon](https://github.com/spr1ntray/soft-hub/releases/download/v0.6.18/Soft-Hub-0.6.18-arm64.dmg)**
 
-В публичном репозитории эта папка содержит только инструкцию: крупные файлы опубликованной версии находятся в [GitHub Releases → Assets](https://github.com/spr1ntray/soft-hub/releases/tag/v0.6.16).
+В публичном репозитории эта папка содержит только инструкцию: крупные файлы опубликованной версии находятся в [GitHub Releases → Assets](https://github.com/spr1ntray/soft-hub/releases/tag/v0.6.18).
 
 ## Что находится в релизе
 
-В этой рабочей папке после локальной сборки лежат:
+В GitHub Release `v0.6.18` находятся:
 
-- `Soft-Hub-0.6.16-arm64.dmg` — для Mac с Apple Silicon (M1/M2/M3/M4 и новее);
-- `Soft-Hub-0.6.16-x64.exe` — для Windows 10/11 x64;
+- `Soft-Hub-0.6.18-arm64.dmg` — для Mac с Apple Silicon (M1/M2/M3/M4 и новее);
+- `Soft-Hub-0.6.18-x64.exe` — для Windows 10/11 x64;
 - `SHA256SUMS` — контрольные суммы файлов релиза.
 
 Python, Node.js, Git, терминал и отдельную базу устанавливать не нужно — всё необходимое уже находится внутри Soft Hub.

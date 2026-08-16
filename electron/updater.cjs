@@ -761,7 +761,7 @@ class HubUpdater {
         if (!confirmed) return this.snapshot();
         const activeAfter = Number(await this.getActiveRuns());
         if (!Number.isSafeInteger(activeAfter) || activeAfter < 0 || activeAfter > 0) {
-          throw new UpdateError('Пока вы подтверждали обновление, появилась активная задача. Дождитесь её завершения.', 'active_runs');
+          throw new UpdateError('Во время подготовки обновления появилась активная задача. Дождитесь её завершения.', 'active_runs');
         }
         let actualDigest;
         try {
@@ -772,8 +772,8 @@ class HubUpdater {
         if (actualDigest !== this.verifiedInstaller.sha256) {
           throw new UpdateError('Проверенный установщик изменился. Скачайте его заново.', 'cached_checksum_mismatch');
         }
-        // The native confirmation plus checks before and after the potentially
-        // expensive rehash narrow the last-moment race before the commit boundary.
+        // Checks before and after the potentially expensive rehash narrow the
+        // last-moment race before the commit boundary.
         const activeAtCommit = Number(await this.getActiveRuns());
         if (!Number.isSafeInteger(activeAtCommit) || activeAtCommit < 0) {
           throw new UpdateError('Hub не смог повторно проверить активные задачи.', 'active_runs_unknown');

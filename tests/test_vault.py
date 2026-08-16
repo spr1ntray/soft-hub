@@ -718,22 +718,16 @@ class VaultTestCase(unittest.TestCase):
                 [], ["adspower_api_key"], [], ["adspower_api"]
             )
 
-    def test_plaintext_export_requires_all_three_guards_and_never_exports_capsolver(self) -> None:
+    def test_plaintext_export_rechecks_password_and_never_exports_global_keys(self) -> None:
         self.create_vault()
         self.vault.import_records([self.record()])
         self.vault.set_capsolver_api_key("CAP-never-export-this-key")
         self.vault.set_adspower_api_key("ADS-never-export-this-key")
 
-        with self.assertRaisesRegex(VaultError, "точная фраза"):
-            self.vault.export_rows(TEST_MASTER_PASSWORD, "EXPORT")
         with self.assertRaisesRegex(VaultError, "Неверный мастер-пароль"):
-            self.vault.export_rows(
-                "Wrong Password 99!", PLAINTEXT_EXPORT_ACKNOWLEDGEMENT
-            )
+            self.vault.export_rows("Wrong Password 99!")
 
-        rows = self.vault.export_rows(
-            TEST_MASTER_PASSWORD, PLAINTEXT_EXPORT_ACKNOWLEDGEMENT
-        )
+        rows = self.vault.export_rows(TEST_MASTER_PASSWORD)
         self.assertEqual(
             rows,
             [
@@ -754,9 +748,7 @@ class VaultTestCase(unittest.TestCase):
 
         self.vault.lock()
         with self.assertRaisesRegex(VaultError, "заблокирован"):
-            self.vault.export_rows(
-                TEST_MASTER_PASSWORD, PLAINTEXT_EXPORT_ACKNOWLEDGEMENT
-            )
+            self.vault.export_rows(TEST_MASTER_PASSWORD)
 
     def test_migration_reencrypts_legacy_payloads_into_topology_only_format(self) -> None:
         legacy_root = Path(self.temporary.name) / "legacy"

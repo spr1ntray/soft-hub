@@ -723,6 +723,10 @@ async function checkedDownload(updater) {
         self.assertNotIn("require('node:", preload)
 
         self.assertIn("preload: join(__dirname, 'preload.cjs')", main)
+        self.assertIn("hubApi('/api/system/shutdown'", main)
+        self.assertIn("app.on('before-quit', (event) =>", main)
+        self.assertIn("event.preventDefault();", main)
+        self.assertIn("void stopHubAndWait()", main)
         self.assertIn("contextIsolation: true", main)
         self.assertIn("nodeIntegration: false", main)
         self.assertIn("sandbox: true", main)

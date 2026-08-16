@@ -21,6 +21,9 @@ _HOST_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
 _VERIFIER = b"soft-hub-vault-v1"
 _KDF = {"name": "scrypt", "n": 32768, "r": 8, "p": 1, "length": 32}
 _MAX_PASSWORD_BYTES = 4096
+# Kept as compatibility aliases for older API clients.  Export authorization is
+# the freshly verified master password; the old typed phrase added friction but
+# no additional identity proof.
 PLAINTEXT_EXPORT_ACKNOWLEDGEMENT = "EXPORT PLAINTEXT SECRETS"
 EXPORT_ACKNOWLEDGEMENT = PLAINTEXT_EXPORT_ACKNOWLEDGEMENT
 _CAPSOLVER_SECRET_NAME = "capsolver_api_key"
@@ -843,10 +846,10 @@ class Vault:
             )
         )
 
-    def export_rows(self, password: str, acknowledgement: str) -> list[dict[str, Any]]:
+    def export_rows(
+        self, password: str, acknowledgement: str | None = None
+    ) -> list[dict[str, Any]]:
         key = self._require_key()
-        if acknowledgement != PLAINTEXT_EXPORT_ACKNOWLEDGEMENT:
-            raise VaultError("Не введена точная фраза подтверждения plaintext export")
         if not self.verify_password(password):
             raise VaultError("Неверный мастер-пароль")
         rows = self.database.all(

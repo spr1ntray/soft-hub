@@ -89,6 +89,24 @@ class ApiSecurityTestCase(unittest.TestCase):
         self.assertNotIn("'unsafe-eval'", csp)
         self.assertNotIn("access-control-allow-origin", headers)
 
+    def test_authenticated_system_shutdown_stops_server_cooperatively(self) -> None:
+        status, headers, body = self.request(
+            "POST",
+            "/api/system/shutdown",
+            body=b"{}",
+            headers={
+                "X-Soft-Hub-Token": TEST_API_TOKEN,
+                "Content-Type": "application/json",
+            },
+        )
+        self.assertEqual(status, 200, body.decode(errors="replace"))
+        self.assertEqual(json.loads(body), {"ok": True})
+        self.assert_security_headers(headers)
+        self.thread.join(timeout=3)
+        self.assertFalse(self.thread.is_alive())
+        self.server.server_close()
+        self.assertTrue(self.application._closed)
+
     def test_static_assets_need_no_token_and_receive_strict_csp(self) -> None:
         for path, content_type in (
             ("/", "text/html"),
@@ -519,7 +537,7 @@ class ApiSecurityTestCase(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(json.loads(body), {"error": "Маршрут не найден"})
 
-    def test_force_stop_api_is_distinct_from_safe_stop(self) -> None:
+    def test_force_stop_api_is_one_click_and_distinct_from_safe_stop(self) -> None:
         archive = write_plugin_archive(
             Path(self.temporary.name) / "force-api.softhub.zip",
             plugin_manifest(plugin_id="api.force-test", safe_stop=False),
@@ -559,10 +577,12 @@ class ApiSecurityTestCase(unittest.TestCase):
             body=b"{}",
             headers=headers,
         )
-        self.assertEqual(status, 400)
-        self.assertIn("FORCE STOP", json.loads(body)["error"])
+        self.assertEqual(status, 202, body.decode(errors="replace"))
+        self.assertIn(json.loads(body)["status"], {"cancelling", "cancelled"})
         self.assert_security_headers(response_headers)
 
+        # The legacy phrase remains accepted and ignored while old renderers are
+        # still in circulation; it is no longer a gate.
         status, response_headers, body = self.request(
             "POST",
             f"/api/runs/{run_id}/force-stop",
@@ -570,7 +590,7 @@ class ApiSecurityTestCase(unittest.TestCase):
             headers=headers,
         )
         self.assertEqual(status, 202, body.decode(errors="replace"))
-        self.assertEqual(json.loads(body)["status"], "cancelling")
+        self.assertIn(json.loads(body)["status"], {"cancelling", "cancelled"})
         self.assert_security_headers(response_headers)
         final = wait_until(
             lambda: (
@@ -1320,7 +1340,7 @@ class ApiSecurityTestCase(unittest.TestCase):
         self.assertEqual(status, 405)
         self.assert_security_headers(headers)
 
-    def test_plaintext_account_export_requires_reauthentication_and_has_exact_columns(self) -> None:
+    def test_plaintext_account_export_reauthenticates_and_has_exact_columns(self) -> None:
         self.application.vault.create(TEST_MASTER_PASSWORD)
         self.application.vault.import_records(
             [
@@ -1344,8 +1364,7 @@ class ApiSecurityTestCase(unittest.TestCase):
             "/api/accounts/export",
             body=json.dumps(
                 {
-                    "password": TEST_MASTER_PASSWORD,
-                    "acknowledgement": "EXPORT",
+                    "password": "Wrong Password 99!",
                 }
             ),
             headers=headers,
@@ -1360,7 +1379,6 @@ class ApiSecurityTestCase(unittest.TestCase):
             body=json.dumps(
                 {
                     "password": TEST_MASTER_PASSWORD,
-                    "acknowledgement": PLAINTEXT_EXPORT_ACKNOWLEDGEMENT,
                 }
             ),
             headers=headers,
@@ -1402,7 +1420,6 @@ class ApiSecurityTestCase(unittest.TestCase):
             body=json.dumps(
                 {
                     "password": TEST_MASTER_PASSWORD,
-                    "acknowledgement": PLAINTEXT_EXPORT_ACKNOWLEDGEMENT,
                     "format": "xlsx",
                 }
             ),
@@ -1462,7 +1479,6 @@ class ApiSecurityTestCase(unittest.TestCase):
             body=json.dumps(
                 {
                     "password": TEST_MASTER_PASSWORD,
-                    "acknowledgement": PLAINTEXT_EXPORT_ACKNOWLEDGEMENT,
                     "format": "unsafe-spreadsheet",
                 }
             ),
@@ -1698,7 +1714,7 @@ class ApiSecurityTestCase(unittest.TestCase):
                 {"idempotency_key": str(uuid.uuid4()), "runs": []},
             ),
             (f"/api/runs/{run_id}/stop", {}),
-            (f"/api/runs/{run_id}/force-stop", {"acknowledgement": "FORCE STOP"}),
+            (f"/api/runs/{run_id}/force-stop", {}),
             (f"/api/runs/{run_id}/review", {}),
             ("/api/settings/capsolver", {"action": "clear"}),
             ("/api/settings/adspower", {"action": "clear"}),

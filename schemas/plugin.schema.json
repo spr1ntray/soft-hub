@@ -59,7 +59,7 @@
         "properties": {
           "type": "object",
           "maxProperties": 40,
-          "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+          "propertyNames": { "pattern": "^(?!(?:capsolver|capsolver_key|capsolver_api_key|cap_solver_api_key|captcha_key|captcha_api_key|adspower_api|adspower_key|adspower_api_key)$)[a-z][a-z0-9_]{0,63}$" },
           "properties": {
             "account_concurrency": {
               "type": "object",
@@ -374,7 +374,6 @@
               "properties": { "risk": { "const": "mainnet_write" } },
               "required": ["risk"]
             },
-            "then": { "required": ["confirmation_phrase"] },
             "else": { "not": { "required": ["confirmation_phrase"] } }
           },
           {

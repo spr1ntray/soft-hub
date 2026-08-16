@@ -69,6 +69,17 @@ _SETTING_RESOURCE_PERMISSIONS = {
     "adspower_api": "adspower_api_key",
 }
 _GLOBAL_SECRET_NAMES = {"capsolver_api_key", "adspower_api_key"}
+_GLOBAL_SETTING_OPTION_NAMES = {
+    "capsolver",
+    "capsolver_key",
+    "capsolver_api_key",
+    "cap_solver_api_key",
+    "captcha_key",
+    "captcha_api_key",
+    "adspower_api",
+    "adspower_key",
+    "adspower_api_key",
+}
 _LEGACY_REFERRAL_SECRET_NAMES = {"referral_code", "referrer_code"}
 _PRESENTATION_ASSET_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".ico"}
 _MAX_PRESENTATION_ASSET_BYTES = {"icon": 2 * 1024 * 1024, "image": 16 * 1024 * 1024}
@@ -371,6 +382,15 @@ def _validate_options_schema(raw: Any, *, strict: bool, scope: str) -> None:
         raise PluginError(f"{scope}.properties требует snake_case primitive-поля")
     if len(properties) > 40:
         raise PluginError(f"{scope}.properties содержит слишком много полей")
+    duplicated_global_settings = sorted(
+        set(properties).intersection(_GLOBAL_SETTING_OPTION_NAMES)
+    )
+    if duplicated_global_settings:
+        raise PluginError(
+            f"{scope}.properties не принимает общие API-ключи через options: "
+            + ", ".join(duplicated_global_settings)
+            + "; объявите action.resources.settings"
+        )
     if (
         not isinstance(required, list)
         or any(not isinstance(key, str) for key in required)
@@ -1209,8 +1229,6 @@ def validate_manifest(raw: Any) -> dict[str, Any]:
             scope=f"actions[{action_id}].output",
             minimum_hub=_version_tuple(minimum),
         )
-        if action["risk"] == "mainnet_write" and not action.get("confirmation_phrase"):
-            raise PluginError("Mainnet-действию обязательна confirmation_phrase")
         if "confirmation_phrase" in action and (
             not isinstance(action["confirmation_phrase"], str)
             or not action["confirmation_phrase"].strip()

@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -105,6 +106,21 @@ class ManifestValidationTests(unittest.TestCase):
             "x-ui": {"group": "Основные параметры", "order": 20},
         }
         cases.append(("unbounded string", free_string, "maxLength"))
+
+        duplicated_capsolver = copy.deepcopy(source)
+        duplicated_capsolver["actions"][0]["options"]["properties"][
+            "capsolver_api_key"
+        ] = {
+            "type": "string",
+            "title": "Capsolver API key",
+            "description": "Общий ключ не должен запрашиваться внутри софта.",
+            "default": "",
+            "maxLength": 256,
+            "x-ui": {"group": "Основные параметры", "order": 20},
+        }
+        cases.append(
+            ("duplicated global Capsolver key", duplicated_capsolver, "общие API-ключи")
+        )
 
         missing_concurrency = copy.deepcopy(source)
         missing_concurrency["actions"][1]["options"]["properties"].pop(
@@ -655,6 +671,12 @@ class ManifestValidationTests(unittest.TestCase):
         option_ui = schema["$defs"]["optionUi"]
         self.assertIn("dual_range", option_ui["properties"]["control"]["enum"])
         self.assertEqual(option_ui["properties"]["range"]["required"], ["id", "role"])
+        option_name_pattern = schema["$defs"]["optionsSchema"]["properties"][
+            "properties"
+        ]["propertyNames"]["pattern"]
+        self.assertIsNotNone(re.fullmatch(option_name_pattern, "account_concurrency"))
+        self.assertIsNone(re.fullmatch(option_name_pattern, "capsolver_api_key"))
+        self.assertIsNone(re.fullmatch(option_name_pattern, "adspower_api_key"))
 
     def test_external_write_is_nonfinancial_account_scoped_and_chainless(self) -> None:
         source = plugin_manifest(
@@ -724,13 +746,18 @@ class ManifestValidationTests(unittest.TestCase):
         duplicate_actions["actions"].append(dict(duplicate_actions["actions"][0]))
         cases.append(("duplicate actions", duplicate_actions))
 
-        missing_confirmation = plugin_manifest(action_risk="mainnet_write")
-        missing_confirmation["actions"][0].pop("confirmation_phrase")
-        cases.append(("mainnet confirmation", missing_confirmation))
-
         for label, manifest in cases:
             with self.subTest(label=label), self.assertRaises(PluginError):
                 validate_manifest(manifest)
+
+        mainnet_without_confirmation = plugin_manifest(
+            action_risk="mainnet_write",
+            account_mode="one_or_more",
+            chains=[1],
+        )
+        mainnet_without_confirmation["actions"][0].pop("confirmation_phrase")
+        validated = validate_manifest(mainnet_without_confirmation)
+        self.assertNotIn("confirmation_phrase", validated["actions"][0])
 
 
 class PluginArchiveTestCase(unittest.TestCase):

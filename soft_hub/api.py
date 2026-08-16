@@ -439,7 +439,15 @@ class HubRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_post(self, path: str, body: dict[str, Any]) -> None:
         app = self.application
-        if path == "/api/vault/create":
+        if path == "/api/system/shutdown":
+            if body:
+                raise ApiError("Для завершения Hub не нужны дополнительные поля")
+            self._json({"ok": True})
+            # BaseServer.shutdown must run outside the request thread.  Returning
+            # the response first lets Electron wait for the Python process and
+            # RunManager.shutdown instead of terminating the core on Windows.
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+        elif path == "/api/vault/create":
             password = body.get("password")
             if not isinstance(password, str):
                 raise ApiError("Нужен мастер-пароль")
@@ -471,13 +479,18 @@ class HubRequestHandler(BaseHTTPRequestHandler):
             )
         elif path == "/api/accounts/export":
             password = body.get("password")
-            acknowledgement = body.get("acknowledgement")
             export_format = body.get("format", "csv")
-            if not isinstance(password, str) or not isinstance(acknowledgement, str):
-                raise ApiError("Для экспорта нужны мастер-пароль и фраза подтверждения")
+            unknown = sorted(set(body) - {"password", "format", "acknowledgement"})
+            if unknown:
+                raise ApiError(f"Неизвестное поле export request: {unknown[0]}")
+            if not isinstance(password, str):
+                raise ApiError("Для экспорта нужен мастер-пароль")
             if not isinstance(export_format, str) or export_format not in {"csv", "xlsx"}:
                 raise ApiError("Формат экспорта должен быть csv или xlsx")
-            rows = app.vault.export_rows(password, acknowledgement)
+            # `acknowledgement` remains accepted and ignored for compatibility
+            # with already installed renderers.  The password is the actual
+            # authorization boundary.
+            rows = app.vault.export_rows(password)
             if export_format == "xlsx":
                 self._xlsx_export(rows)
             else:
@@ -589,13 +602,11 @@ class HubRequestHandler(BaseHTTPRequestHandler):
             self._json(app.runs.stop(match.group(1)), status=202)
         elif match := _RUN_FORCE_STOP_ROUTE.fullmatch(path):
             self._require_unlocked_projection()
-            acknowledgement = body.get("acknowledgement", "")
-            if not isinstance(acknowledgement, str):
-                raise ApiError("acknowledgement должен быть строкой")
-            self._json(
-                app.runs.force_stop(match.group(1), acknowledgement),
-                status=202,
-            )
+            unknown = sorted(set(body) - {"acknowledgement"})
+            if unknown:
+                raise ApiError(f"Неизвестное поле force-stop request: {unknown[0]}")
+            # Legacy clients may still send `acknowledgement`; it is ignored.
+            self._json(app.runs.force_stop(match.group(1)), status=202)
         elif match := _RUN_REVIEW_ROUTE.fullmatch(path):
             self._require_unlocked_projection()
             if body:

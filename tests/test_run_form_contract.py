@@ -9,7 +9,7 @@ from pathlib import Path
 from soft_hub.config import HubPaths
 from soft_hub.database import Database
 from soft_hub.plugins import PluginManager
-from soft_hub.runner import RunError, RunManager
+from soft_hub.runner import RunManager
 from soft_hub.vault import ImportRecord, Vault
 from tests.support import (
     TEST_MASTER_PASSWORD,
@@ -31,8 +31,8 @@ class RunFormSourceContractTests(unittest.TestCase):
         cls.html = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
         cls.javascript = (STATIC_ROOT / "app.js").read_text(encoding="utf-8")
 
-    def test_numeric_options_have_explicit_steps_and_testnet_ack_is_hub_owned(self) -> None:
-        """Keep decimal defaults valid and expose only the Hub risk confirmation."""
+    def test_numeric_options_have_explicit_steps_without_confirmation_inputs(self) -> None:
+        """Keep decimal defaults valid without adding a second launch gate."""
         helper = re.search(
             r"function optionNumberStep\(type, field\) \{(?P<body>.*?)\n\}",
             self.javascript,
@@ -69,11 +69,13 @@ class RunFormSourceContractTests(unittest.TestCase):
         self.assertIn("Object.entries(properties)", option_entries)
         self.assertIn("key === 'acknowledge_testnet_transactions'", option_entries)
         self.assertIn("field.type === 'boolean'", option_entries)
-        self.assertEqual(
-            self.html.count('id="risk-confirmation"'),
-            1,
-            "A testnet action must have exactly one visible Hub-owned confirmation",
-        )
+        self.assertNotIn('id="risk-confirmation"', self.html)
+        self.assertNotIn('id="mainnet-confirmation"', self.html)
+        run_submit = self.javascript[
+            self.javascript.index("async function handleRunSubmit("):
+            self.javascript.index("function drawerAccountTableMarkup(")
+        ]
+        self.assertNotIn("acknowledgement", run_submit)
 
     def test_dual_range_uses_two_canonical_values_and_rejects_reversed_bounds(self) -> None:
         range_renderer = self.javascript[
@@ -177,7 +179,7 @@ class TrustedTestnetAcknowledgementTests(unittest.TestCase):
 
         return wait_until(current, timeout=12.0)
 
-    def test_verified_testnet_ack_is_injected_and_cannot_be_spoofed_by_options(self) -> None:
+    def test_testnet_legacy_flag_is_injected_without_typed_confirmation(self) -> None:
         self.vault.create(TEST_MASTER_PASSWORD)
         self.vault.import_records(
             [
@@ -220,15 +222,6 @@ class TrustedTestnetAcknowledgementTests(unittest.TestCase):
         )
         self.plugins.install(archive)
 
-        with self.assertRaisesRegex(RunError, "TESTNET"):
-            self.runs.start(
-                "runner.trusted-testnet-ack",
-                "run",
-                [account_id],
-                {"acknowledge_testnet_transactions": True},
-                acknowledgement="",
-            )
-
         client_options = {
             "acknowledge_testnet_transactions": False,
             "marker": "preserved",
@@ -238,7 +231,6 @@ class TrustedTestnetAcknowledgementTests(unittest.TestCase):
             "run",
             [account_id],
             client_options,
-            acknowledgement="TESTNET",
         )
         completed = self.wait_for_terminal(str(started["id"]))
         wait_until(

@@ -24,7 +24,6 @@
     <svg class="svg-sprite" aria-hidden="true">
       <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.25"/><path d="M12 2.5v2M12 19.5v2M4.05 4.05l1.42 1.42M18.53 18.53l1.42 1.42M2.5 12h2M19.5 12h2M4.05 19.95l1.42-1.42M18.53 5.47l1.42-1.42"/></symbol>
       <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M20.2 15.35A8.7 8.7 0 0 1 8.65 3.8 8.7 8.7 0 1 0 20.2 15.35Z"/></symbol>
-      <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M19 8a7.5 7.5 0 1 0 .2 7.6M19 3v5h-5"/></symbol>
       <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="icon-play" viewBox="0 0 24 24"><path d="m9 7 8 5-8 5Z"/></symbol>
       <symbol id="icon-batch" viewBox="0 0 24 24"><rect x="4" y="5" width="11" height="11" rx="3"/><path d="M8 19h8a3 3 0 0 0 3-3V8M9.5 9v3l2.5-1.5Z"/></symbol>
@@ -42,6 +41,7 @@
       <symbol id="icon-browser" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M3.5 9h17M7 6.75h.05M10 6.75h.05"/><path d="M9 14h6M12 11v6"/></symbol>
       <symbol id="icon-referral" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="11" cy="18" r="2.5"/><path d="m8.35 6.55 7.2.9M7.2 8.2l2.65 7.4M16.45 10.15l-3.9 5.7"/></symbol>
       <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="4.5" y="10" width="15" height="10" rx="3"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10M12 14v2"/></symbol>
+      <symbol id="icon-key" viewBox="0 0 24 24"><circle cx="8" cy="12" r="3.75"/><path d="M11.75 12H20M16.25 12v3M19 12v2"/></symbol>
       <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></symbol>
       <symbol id="icon-force" viewBox="0 0 24 24"><path d="m13.6 2.9-7 10.25h5.15l-1.3 7.95 7-10.25H12.3Z"/></symbol>
       <symbol id="icon-close" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></symbol>
@@ -114,9 +114,6 @@
             <h1 id="page-title" tabindex="-1">Обзор</h1>
           </div>
           <div class="top-actions">
-            <button id="refresh-button" class="icon-button" type="button" aria-label="Обновить данные" title="Обновить данные">
-              <svg class="hub-icon" aria-hidden="true"><use href="#icon-refresh"></use></svg>
-            </button>
             <button id="theme-button" class="theme-switch" type="button" role="switch" aria-checked="false" aria-label="Включить тёмную тему" title="Переключить тему">
               <span class="theme-switch-track" aria-hidden="true"><i class="theme-sun"><svg class="hub-icon"><use href="#icon-sun"></use></svg></i><span class="theme-switch-thumb"></span><i class="theme-moon"><svg class="hub-icon"><use href="#icon-moon"></use></svg></i></span>
             </button>
@@ -205,19 +202,30 @@
             </div>
             <div class="privacy-strip">
               <span class="privacy-lock" aria-hidden="true">◆</span>
-              <div><strong>AES-256-GCM · scrypt</strong><small>В таблице секреты скрыты. Для открытого экспорта снова понадобится мастер-пароль и отдельное подтверждение.</small></div>
+              <div><strong>AES-256-GCM · scrypt</strong><small>В таблице секреты скрыты. Для открытого экспорта понадобится мастер-пароль.</small></div>
               <span id="vault-chip" class="status-chip">Проверяем</span>
             </div>
             <div class="account-capability-grid">
-              <article class="account-capability account-capability--browser">
+              <article class="account-capability account-capability--connection account-capability--browser">
                 <span class="capability-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-browser"></use></svg></span>
                 <div class="capability-copy"><p>БРАУЗЕР</p><h3>AdsPower Local API</h3><span>API-ключ один на весь Hub. ID профиля AdsPower задаётся отдельно для каждого аккаунта.</span></div>
                 <span id="adspower-status" class="capability-status" data-state="loading" role="status" aria-live="polite">Проверяем</span>
                 <form id="adspower-form" class="capability-secret-form">
                   <label for="adspower-key" class="sr-only">Общий AdsPower Local API key</label>
-                  <input id="adspower-key" type="password" minlength="4" autocomplete="off" spellcheck="false" placeholder="Вставьте общий API key" />
+                  <input id="adspower-key" type="password" minlength="4" autocomplete="off" spellcheck="false" placeholder="Вставьте API key" />
                   <button id="adspower-save" class="button button--ink" type="submit">Сохранить</button>
                   <button id="adspower-clear" class="button button--quiet" type="button">Удалить</button>
+                </form>
+              </article>
+              <article class="account-capability account-capability--connection account-capability--capsolver">
+                <span class="capability-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-key"></use></svg></span>
+                <div class="capability-copy"><p>КАПЧА</p><h3>Capsolver API</h3><span>Один ключ для всех софтов. Hub хранит его в Vault и выдаёт только тем запускам, которым он нужен.</span></div>
+                <span id="capsolver-status" class="capability-status" data-state="loading" role="status" aria-live="polite">Проверяем</span>
+                <form id="capsolver-form" class="capability-secret-form">
+                  <label for="capsolver-key" class="sr-only">Общий API-ключ Capsolver</label>
+                  <input id="capsolver-key" type="password" minlength="4" autocomplete="off" spellcheck="false" placeholder="Вставьте API key" />
+                  <button id="capsolver-save" class="button button--ink" type="submit">Сохранить</button>
+                  <button id="capsolver-clear" class="button button--quiet" type="button">Удалить</button>
                 </form>
               </article>
               <article class="account-capability account-capability--referrals">
@@ -460,7 +468,7 @@
           </section>
 
           <section id="view-settings" class="view">
-            <div class="section-intro"><div><p class="section-kicker">НАСТРОЙКИ</p><h2>Настройки</h2><span>Здесь версия Hub, хранилище, ключи и общие правила запуска.</span></div></div>
+            <div class="section-intro"><div><p class="section-kicker">НАСТРОЙКИ</p><h2>Настройки</h2><span>Здесь версия Hub, хранилище и общие правила запуска.</span></div></div>
             <div class="settings-grid">
               <article id="core-update-card" class="setting-card setting-card--update" data-state="idle" aria-labelledby="core-update-heading" aria-busy="false">
                 <span class="setting-index setting-update-mark" aria-hidden="true"><svg class="hub-icon"><use href="#icon-download"></use></svg><i></i></span>
@@ -468,7 +476,7 @@
                   <div class="setting-update-head"><h3 id="core-update-heading">Обновление Hub</h3><span id="settings-app-version">v…</span><span id="core-update-state" class="setting-update-state" data-state="idle">ГОТОВ К ПРОВЕРКЕ</span></div>
                   <div id="core-update-live" class="core-update-live" role="status" aria-live="polite" aria-atomic="true">
                     <strong id="core-update-title">Проверим, есть ли новая версия</strong>
-                    <p id="core-update-copy">Hub сам посмотрит официальный GitHub. Скачивание и установка начнутся только после вашего разрешения.</p>
+                    <p id="core-update-copy">Hub сам посмотрит официальный GitHub. Скачивание начнётся по кнопке, установка — отдельным нажатием.</p>
                   </div>
                   <div id="core-update-progress" class="core-update-progress" hidden>
                     <progress id="core-update-progress-bar" max="100" value="0" aria-label="Загрузка обновления: 0%">0%</progress>
@@ -494,10 +502,9 @@
                 </div>
               </article>
               <article class="setting-card"><span class="setting-index">01</span><div><h3>Vault</h3><p id="settings-vault-copy">Проверяем состояние хранилища.</p></div><button id="settings-vault-action" class="button button--quiet" type="button">Открыть</button></article>
-              <article class="setting-card setting-card--secret"><span class="setting-index">02</span><div><h3>Capsolver</h3><p>Один ключ для всех софтов с Capsolver. Он хранится в Vault и выдаётся только тем, кому действительно нужен.</p><form id="capsolver-form" class="inline-secret-form"><label for="capsolver-key" class="sr-only">API-ключ Capsolver</label><input id="capsolver-key" type="password" minlength="4" autocomplete="off" spellcheck="false" placeholder="Введите новый API-ключ" /><button id="capsolver-save" class="button button--ink" type="submit">Сохранить</button><button id="capsolver-clear" class="button button--quiet" type="button">Удалить</button></form></div><span id="capsolver-status" class="setting-value">НЕ ДОБАВЛЕН</span></article>
-              <article class="setting-card"><span class="setting-index">03</span><div><h3>AdsPower и рефералы</h3><p>API-ключ AdsPower, ID профилей и реферальная карта находятся в разделе «Аккаунты».</p></div><button class="button button--quiet" type="button" data-open-account-connections>Открыть аккаунты</button></article>
-              <article class="setting-card"><span class="setting-index">04</span><div><h3>Изоляция</h3><p>Каждый софт запускается отдельно от остальных. Секреты передаются ему один раз через защищённый канал.</p></div><span class="setting-value">ОТДЕЛЬНО</span></article>
-              <article class="setting-card"><span class="setting-index">05</span><div><h3>Параллельность</h3><p>Hub не даст двум задачам одновременно менять один и тот же кошелёк в одной сети.</p></div><span class="setting-value">4 ЗАПУСКА</span></article>
+              <article class="setting-card"><span class="setting-index">02</span><div><h3>Аккаунты и подключения</h3><p>Общие API-ключи, ID профилей AdsPower и реферальная карта собраны в одном месте — в разделе «Аккаунты».</p></div><button class="button button--quiet" type="button" data-open-account-connections>Открыть аккаунты</button></article>
+              <article class="setting-card"><span class="setting-index">03</span><div><h3>Изоляция</h3><p>Каждый софт запускается отдельно от остальных. Секреты передаются ему один раз через защищённый канал.</p></div><span class="setting-value">ОТДЕЛЬНО</span></article>
+              <article class="setting-card"><span class="setting-index">04</span><div><h3>Параллельность</h3><p>Hub не даст двум задачам одновременно менять один и тот же кошелёк в одной сети.</p></div><span class="setting-value">4 ЗАПУСКА</span></article>
               <article class="setting-card setting-card--warning"><span class="setting-index">!</span><div><h3>Граница доверия</h3><p>Установленный софт работает с правами вашего пользователя. Добавляйте только свой код или пакеты, которым доверяете.</p></div><span class="setting-value">ВАЖНО</span></article>
             </div>
           </section>
@@ -593,11 +600,10 @@
       <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
       <p class="modal-kicker">ОТКРЫТЫЙ ЭКСПОРТ</p>
       <h2 id="export-modal-title">Экспортировать аккаунты</h2>
-      <p>В XLSX все ячейки сохраняются как текст, поэтому Excel не запустит значения с <code>= + - @</code> как формулы. Но в файле будут открытые секреты — Vault его уже не защищает.</p>
+      <p>В XLSX все ячейки сохраняются как текст, поэтому Excel не запустит значения с <code>= + - @</code> как формулы. В файле будут открытые секреты — для доступа нужен мастер-пароль.</p>
       <form id="export-form">
         <label>Формат<select id="export-format"><option value="xlsx" selected>XLSX для Excel — советуем</option><option value="csv">CSV без защиты — только для импорта</option></select></label>
         <label>Мастер-пароль<input id="export-password" type="password" autocomplete="current-password" minlength="14" required /></label>
-        <label>Введите <strong>EXPORT PLAINTEXT SECRETS</strong><input id="export-acknowledgement" type="text" autocomplete="off" spellcheck="false" required /></label>
         <p id="export-error" class="form-error" role="alert" hidden></p>
         <button id="export-submit" class="button button--danger button--wide" type="submit">Скачать файл с открытыми секретами</button>
       </form>
@@ -690,21 +696,8 @@
           </section>
         </div>
         <div id="batch-run-list" class="batch-run-list"></div>
-        <label id="batch-testnet-confirmation" class="risk-confirmation" hidden><input id="batch-risk-checkbox" type="checkbox" /><span><strong>Подтверждаю testnet-запуски в этой пачке</strong><small>Отмеченные действия могут подписывать тестовые транзакции и расходовать газ.</small></span></label>
         <p id="batch-run-error" class="form-error" role="alert" hidden></p>
         <div class="batch-launch-actions"><button class="button button--quiet" type="button" data-modal-close>Отмена</button><button id="batch-run-submit" class="button button--acid" type="submit"><svg class="hub-icon" aria-hidden="true"><use href="#icon-batch"></use></svg>Запустить параллельно</button></div>
-      </form>
-    </section>
-
-    <section id="destructive-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="destructive-modal-title" hidden>
-      <button class="modal-close" type="button" data-modal-close aria-label="Закрыть">×</button>
-      <p class="modal-kicker">ПРОВЕРЬТЕ ДЕЙСТВИЕ</p>
-      <h2 id="destructive-modal-title">Подтвердите действие</h2>
-      <p id="destructive-modal-copy"></p>
-      <form id="destructive-form" novalidate>
-        <label id="destructive-phrase-label" hidden><span id="destructive-phrase-copy"></span><input id="destructive-phrase" type="text" autocomplete="off" spellcheck="false" /></label>
-        <p id="destructive-error" class="form-error" role="alert" hidden></p>
-        <div class="destructive-actions"><button id="destructive-cancel" class="button button--quiet" type="button">Отмена</button><button id="destructive-submit" class="button button--danger" type="submit">Подтвердить</button></div>
       </form>
     </section>
 
@@ -739,8 +732,6 @@
           <header class="run-config-head"><span>04</span><div><strong id="run-options-title">Дополнительные настройки</strong><small>Подходящие значения уже стоят. Меняйте только если нужно.</small></div><small id="run-options-count" class="run-config-count">0 параметров</small></header>
           <div id="run-options" class="run-options"></div>
         </section>
-        <label id="risk-confirmation" class="risk-confirmation" hidden><input id="risk-checkbox" name="testnet-confirmation" type="checkbox" /><span><strong>Подтверждаю запуск в testnet</strong><small>Действие может подписывать тестовые транзакции и расходовать газ.</small></span></label>
-        <label id="mainnet-confirmation" hidden>Фраза подтверждения<input id="mainnet-phrase" name="mainnet-confirmation" type="text" autocomplete="off" spellcheck="false" /></label>
         <p id="run-error" class="form-error" role="alert" hidden></p>
         <footer class="run-launch-footer"><span><strong>Готово к запуску</strong><small id="run-launch-summary" aria-live="polite">Выберите сценарий и аккаунты.</small></span><button id="run-submit" class="button button--acid" type="submit">Запустить</button></footer>
       </form>

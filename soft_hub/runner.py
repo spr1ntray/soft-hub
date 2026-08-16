@@ -187,7 +187,137 @@ class IdempotencyConflictError(RunError):
     pass
 
 
-FORCE_STOP_ACKNOWLEDGEMENT = "FORCE STOP"
+_CANCEL_REQUEST_FILENAME = ".soft-hub-cancel"
+
+
+class _WindowsJob:
+    """Own a Windows process tree until a run has completely finalized.
+
+    ``taskkill /T`` can only discover descendants while their original parent
+    still exists.  A plugin bootstrap may exit before one of its browser or
+    worker children, which makes that fallback inherently racy.  A Job Object
+    records membership in the kernel instead and kills every remaining member
+    when explicitly terminated or when the Hub closes the job handle.
+    """
+
+    _KILL_ON_JOB_CLOSE = 0x00002000
+    _EXTENDED_LIMIT_INFORMATION = 9
+    _FORCED_EXIT_CODE = 130
+    _WAIT_OBJECT_0 = 0
+
+    def __init__(self, kernel32: Any, handle: Any):
+        self._kernel32 = kernel32
+        self._handle = handle
+        self._lock = threading.Lock()
+
+    @classmethod
+    def attach(cls, process: subprocess.Popen[str]) -> _WindowsJob:
+        if os.name != "nt":
+            raise OSError("Windows Job Object доступен только на Windows")
+
+        import ctypes
+        from ctypes import wintypes
+
+        class _BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_uint64),
+                ("WriteOperationCount", ctypes.c_uint64),
+                ("OtherOperationCount", ctypes.c_uint64),
+                ("ReadTransferCount", ctypes.c_uint64),
+                ("WriteTransferCount", ctypes.c_uint64),
+                ("OtherTransferCount", ctypes.c_uint64),
+            ]
+
+        class _ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimitInformation),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+
+        handle = kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            limits = _ExtendedLimitInformation()
+            limits.BasicLimitInformation.LimitFlags = cls._KILL_ON_JOB_CLOSE
+            if not kernel32.SetInformationJobObject(
+                handle,
+                cls._EXTENDED_LIMIT_INFORMATION,
+                ctypes.byref(limits),
+                ctypes.sizeof(limits),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            process_handle = wintypes.HANDLE(int(getattr(process, "_handle")))
+            if not kernel32.AssignProcessToJobObject(handle, process_handle):
+                raise ctypes.WinError(ctypes.get_last_error())
+        except BaseException:
+            kernel32.CloseHandle(handle)
+            raise
+        return cls(kernel32, handle)
+
+    def terminate(self) -> bool:
+        with self._lock:
+            if self._handle is None:
+                return True
+            return bool(
+                self._kernel32.TerminateJobObject(
+                    self._handle,
+                    self._FORCED_EXIT_CODE,
+                )
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            handle = self._handle
+            self._handle = None
+        if handle is not None:
+            self._kernel32.CloseHandle(handle)
+
+    def wait(self, timeout: float) -> bool:
+        with self._lock:
+            if self._handle is None:
+                return True
+            milliseconds = max(0, min(int(timeout * 1000), 0xFFFFFFFE))
+            return bool(
+                self._kernel32.WaitForSingleObject(self._handle, milliseconds)
+                == self._WAIT_OBJECT_0
+            )
 
 
 def _catalog_snapshot(value: Any) -> list[str]:
@@ -704,6 +834,7 @@ class RunManager:
         self.vault = vault
         self._slots = threading.BoundedSemaphore(max(1, max_concurrent))
         self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._process_jobs: dict[str, _WindowsJob] = {}
         self._threads: dict[str, threading.Thread] = {}
         self._manifests: dict[str, dict[str, Any]] = {}
         self._cancel_requests: set[str] = set()
@@ -908,12 +1039,6 @@ class RunManager:
             raise RunError("Выберите минимум один аккаунт")
         if action["account_mode"] == "none" and account_ids:
             raise RunError("Это действие не принимает аккаунты")
-        phrase = str(action.get("confirmation_phrase", ""))
-        if phrase and acknowledgement != phrase:
-            raise RunError("Не введена обязательная фраза подтверждения")
-        if action["risk"] == "testnet_write" and acknowledgement != "TESTNET":
-            raise RunError("Для testnet-действия требуется подтверждение TESTNET")
-
         if options is not None and not isinstance(options, dict):
             raise RunError("options должен быть JSON-объектом")
         run_options = dict(options or {})
@@ -927,9 +1052,8 @@ class RunManager:
             and isinstance(testnet_acknowledgement, dict)
             and testnet_acknowledgement.get("type") == "boolean"
         ):
-            # The Hub confirmation is the single trusted testnet gate. Legacy
-            # adapters still consume this option, so derive it server-side only
-            # after the acknowledgement above has been validated.
+            # Legacy adapters still consume this field. It is Hub-owned and is
+            # derived server-side; users never type a confirmation phrase.
             run_options["acknowledge_testnet_transactions"] = True
         run_options = validate_run_options(action.get("options", {}), run_options)
         account_concurrency = 1
@@ -1198,7 +1322,20 @@ class RunManager:
     ) -> None:
         """Commit a terminal run state and its unresolved account projections."""
         now = utc_now()
-        with self.database.transaction() as connection:
+        # Serialize the terminal commit against stop/force-stop admission. This
+        # gives the race one clear winner: either completion commits first and
+        # Stop becomes a no-op, or Stop marks the active row and this commit is
+        # forced to `cancelled`. Neither path can resurrect a terminal run as
+        # `cancelling` or turn an accepted cancellation back into success.
+        with self._lock, self.database.transaction() as connection:
+            if run_id in self._cancel_requests:
+                status = "cancelled"
+                summary = {}
+                error = (
+                    "process_force_killed"
+                    if run_id in self._force_killed
+                    else None
+                )
             self._recover_legacy_account_summaries(connection, run_id, now)
             account_progress = connection.execute(
                 "SELECT COUNT(*) AS count,AVG(progress) AS progress "
@@ -1346,6 +1483,10 @@ class RunManager:
     ) -> None:
         terminal: str | None = None
         terminal_data: dict[str, Any] = {}
+        final_status: str | None = None
+        final_progress = 0.0
+        final_summary: dict[str, Any] = {}
+        final_error: str | None = None
         accounts: list[dict[str, Any]] = []
         referral_parents: list[dict[str, Any]] = []
         settings: dict[str, str] = {}
@@ -1408,6 +1549,7 @@ class RunManager:
                 raise RunError("Окружение плагина больше не готово; подготовьте его заново")
             scratch = self.paths.runs / run_id / "scratch"
             scratch.mkdir(parents=True, exist_ok=False, mode=0o700)
+            cancel_path = scratch.parent / _CANCEL_REQUEST_FILENAME
             context = {
                 "run_id": run_id,
                 "plugin_id": module["id"],
@@ -1432,6 +1574,7 @@ class RunManager:
                 },
                 "plugin_root": str(plugin_path),
                 "scratch_dir": str(scratch),
+                "cancel_path": str(cancel_path),
             }
             command = [
                 str(python),
@@ -1468,6 +1611,22 @@ class RunManager:
                         shell=False,
                         **popen_options,
                     )
+                    if os.name == "nt":
+                        try:
+                            self._process_jobs[run_id] = _WindowsJob.attach(process)
+                        except BaseException as error:
+                            # The bootstrap is still waiting for its context and
+                            # cannot have started plugin side effects yet. Fail
+                            # closed instead of starting an unowned process tree
+                            # that Force stop could later lose.
+                            try:
+                                process.kill()
+                                process.wait(timeout=5)
+                            except (OSError, subprocess.SubprocessError):
+                                pass
+                            raise RunError(
+                                "Windows не смог подготовить надёжную остановку процесса"
+                            ) from error
                     self._processes[run_id] = process
             if cancelled_before_spawn:
                 self._cancelled_before_process_start(run_id)
@@ -1517,7 +1676,7 @@ class RunManager:
                         leader_exited_at = tick
                     elif tick - leader_exited_at > 2 and not pipes_forced:
                         pipes_forced = True
-                        self._signal_process(process, force=True)
+                        self._signal_process(run_id, process, force=True)
                     elif tick - leader_exited_at > 4:
                         for stream in (process.stdout, process.stderr):
                             if stream is not None and not stream.closed:
@@ -1546,7 +1705,7 @@ class RunManager:
                             "Плагин превысил лимит строк вывода и был остановлен",
                         )
                         if process.poll() is None:
-                            self._signal_process(process, force=True)
+                            self._signal_process(run_id, process, force=True)
                     continue
                 if source == "stderr":
                     if line == _OVERSIZE_LINE:
@@ -1596,7 +1755,7 @@ class RunManager:
                     malformed += 1
                     self._event(run_id, "warning", "protocol", "Плагин отправил некорректный protocol frame")
                     if malformed >= 3 and process.poll() is None:
-                        self._signal_process(process, force=True)
+                        self._signal_process(run_id, process, force=True)
                         terminal = "failed"
                         terminal_data = {"reason": "protocol_error"}
 
@@ -1608,6 +1767,13 @@ class RunManager:
                 status = "cancelled"
                 progress = self._current_progress(run_id)
                 error = "process_force_killed"
+            elif cancellation_requested:
+                # Once Stop has been accepted, a racing `completed` frame must
+                # not turn the run green again. The operator's cancellation is
+                # the authoritative terminal intent at this boundary.
+                status = "cancelled"
+                progress = self._current_progress(run_id)
+                error = None
             elif terminal == "completed" and exit_code == 0:
                 status = "succeeded"
                 progress = 1.0
@@ -1629,13 +1795,10 @@ class RunManager:
                     else terminal_data.get("reason")
                     or "Плагин завершился без успешного terminal event"
                 )
-            self._finish_run(
-                run_id,
-                status=status,
-                progress=progress,
-                summary=terminal_data.get("summary", {}),
-                error=error,
-            )
+            final_status = status
+            final_progress = progress
+            final_summary = terminal_data.get("summary", {})
+            final_error = error
         except BaseException as error:
             message = redactor.text(error)
             self._event(run_id, "error", "host", message)
@@ -1654,15 +1817,12 @@ class RunManager:
                 if cancellation_requested
                 else message
             )
-            self._finish_run(
-                run_id,
-                status=failure_status,
-                progress=self._current_progress(run_id),
-                summary={},
-                error=failure_error,
-            )
+            final_status = failure_status
+            final_progress = self._current_progress(run_id)
+            final_summary = {}
+            final_error = failure_error
             if process and process.poll() is None:
-                self._signal_process(process, force=True)
+                self._signal_process(run_id, process, force=True)
         finally:
             accounts.clear()
             referral_parents.clear()
@@ -1671,7 +1831,7 @@ class RunManager:
                 if process.poll() is None:
                     with self._lock:
                         self._force_killed.add(run_id)
-                    self._signal_process(process, force=True)
+                    self._signal_process(run_id, process, force=True)
                     try:
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
@@ -1683,10 +1843,32 @@ class RunManager:
                         except (OSError, ValueError):
                             pass
                 if os.name != "nt":
-                    self._signal_process(process, force=True)
+                    self._signal_process(run_id, process, force=True)
             with self._lock:
                 self._processes.pop(run_id, None)
+                process_job = self._process_jobs.pop(run_id, None)
+            if process_job is not None:
+                # KILL_ON_JOB_CLOSE is the last containment boundary for a
+                # descendant that outlived the bootstrap or inherited a pipe.
+                process_job.terminate()
+                process_job.wait(timeout=5)
+                process_job.close()
+            elif process is not None and os.name != "nt":
+                self._wait_for_posix_process_group(process.pid, timeout=5)
             try:
+                if final_status is not None:
+                    # The terminal projection releases account leases. Publish
+                    # it only after every process in the run's containment tree
+                    # has been terminated and waited out.
+                    self._finish_run(
+                        run_id,
+                        status=final_status,
+                        progress=final_progress,
+                        summary=final_summary,
+                        error=final_error,
+                    )
+                # Idempotent cleanup remains an explicit finalization boundary
+                # even though `_finish_run` releases leases transactionally.
                 self._release_leases(run_id)
             finally:
                 self._release_pins(run_id)
@@ -2077,15 +2259,42 @@ class RunManager:
         if run["status"] not in {"queued", "starting", "running", "cancelling"}:
             return run
         with self._lock:
+            # Re-read under the same lock used by `_finish_run`; the projection
+            # fetched above may have become terminal while this request crossed
+            # the HTTP/worker boundary.
+            current = self.get(run_id)
+            if not current:
+                raise RunError("Запуск не найден")
+            if current["status"] not in {
+                "queued",
+                "starting",
+                "running",
+                "cancelling",
+            }:
+                return current
             meta = self._manifests.get(run_id, {})
             manifest = meta.get("manifest", {})
             if manifest.get("runtime", {}).get("safe_stop") is not True:
                 raise RunError("Плагин не объявил безопасную остановку; требуется recovery-действие")
             self._cancel_requests.add(run_id)
+            changed = self.database.execute(
+                "UPDATE runs SET status='cancelling' WHERE id=? "
+                "AND status IN ('queued','starting','running','cancelling')",
+                (run_id,),
+            )
+            if not changed:
+                self._cancel_requests.discard(run_id)
+                return self.get(run_id) or current
             process = self._processes.get(run_id)
-        self.database.execute("UPDATE runs SET status='cancelling' WHERE id=?", (run_id,))
+        self._event(
+            run_id,
+            "info",
+            "host",
+            "Оператор запросил мягкую остановку процесса",
+        )
+        self._request_cooperative_cancel(run_id)
         if process and process.poll() is None:
-            self._signal_process(process, force=False)
+            self._signal_process(run_id, process, force=False)
             threading.Thread(
                 target=self._force_after_grace,
                 args=(run_id, process, 10),
@@ -2093,7 +2302,7 @@ class RunManager:
             ).start()
         return self.get(run_id) or run
 
-    def force_stop(self, run_id: str, acknowledgement: str) -> dict[str, Any]:
+    def force_stop(self, run_id: str, acknowledgement: str = "") -> dict[str, Any]:
         """Immediately kill a run, bypassing the plugin's safe-stop declaration."""
         run = self.get(run_id)
         if not run:
@@ -2101,9 +2310,6 @@ class RunManager:
         active_statuses = {"queued", "starting", "running", "cancelling"}
         if run["status"] not in active_statuses:
             return run
-        if acknowledgement != FORCE_STOP_ACKNOWLEDGEMENT:
-            raise RunError(f"Для принудительной остановки введите {FORCE_STOP_ACKNOWLEDGEMENT}")
-
         with self._lock:
             changed = self.database.execute(
                 "UPDATE runs SET status='cancelling' WHERE id=? "
@@ -2115,7 +2321,7 @@ class RunManager:
             self._cancel_requests.add(run_id)
             self._force_stop_requests.add(run_id)
             process = self._processes.get(run_id)
-            if process is not None and process.poll() is None:
+            if process is not None:
                 self._force_killed.add(run_id)
 
         self._event(
@@ -2124,8 +2330,12 @@ class RunManager:
             "host",
             "Оператор запросил принудительную остановку процесса",
         )
-        if process is not None and process.poll() is None:
-            self._signal_process(process, force=True)
+        self._request_cooperative_cancel(run_id)
+        if process is not None:
+            # Signal the owned tree even if its bootstrap leader already
+            # exited. Windows Job Objects and POSIX process groups both retain
+            # descendants beyond that point.
+            self._signal_process(run_id, process, force=True)
         return self.get(run_id) or run
 
     def uninstall_module(self, plugin_id: str) -> dict[str, Any]:
@@ -2210,6 +2420,27 @@ class RunManager:
             )
         return self.get(run_id) or {}
 
+    def _request_cooperative_cancel(self, run_id: str) -> None:
+        """Publish cancellation without relying on platform signal semantics."""
+        path = self.paths.runs / run_id / _CANCEL_REQUEST_FILENAME
+        if not path.parent.is_dir():
+            # A queued worker observes `_cancel_requests` before it creates a
+            # scratch directory, so it does not need a marker.
+            return
+        flags = os.O_WRONLY | os.O_CREAT
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        try:
+            descriptor = os.open(path, flags, 0o600)
+            try:
+                os.write(descriptor, b"cancel\n")
+            finally:
+                os.close(descriptor)
+        except OSError:
+            # POSIX also receives SIGTERM and every soft stop still escalates.
+            # On Windows the grace timer guarantees a Job Object termination.
+            return
+
     def _force_after_grace(self, run_id: str, process: subprocess.Popen[str], seconds: int) -> None:
         try:
             process.wait(timeout=seconds)
@@ -2217,30 +2448,41 @@ class RunManager:
             self._event(run_id, "warning", "host", "Плагин не остановился вовремя; процесс завершён принудительно")
             with self._lock:
                 self._force_killed.add(run_id)
-            self._signal_process(process, force=True)
+            self._signal_process(run_id, process, force=True)
         else:
-            if os.name != "nt":
-                self._signal_process(process, force=True)
+            # A cooperative bootstrap may leave an inherited browser/worker
+            # behind. Clean the complete containment group on every platform.
+            self._signal_process(run_id, process, force=True)
 
-    @staticmethod
-    def _signal_process(process: subprocess.Popen[str], force: bool) -> None:
+    def _signal_process(
+        self,
+        run_id: str,
+        process: subprocess.Popen[str],
+        force: bool,
+    ) -> None:
         try:
             if os.name == "nt":
+                if not force:
+                    # Windows has no reliable SIGTERM equivalent for a GUI
+                    # application without a shared console. The cancellation
+                    # marker is watched inside bootstrap instead.
+                    return
+                with self._lock:
+                    process_job = self._process_jobs.get(run_id)
+                if process_job is not None and process_job.terminate():
+                    return
                 if process.poll() is not None:
                     return
-                if force:
-                    completed = subprocess.run(
-                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=10,
-                        check=False,
-                    )
-                    if completed.returncode != 0 and process.poll() is None:
-                        process.kill()
-                else:
-                    process.terminate()
+                completed = subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+                if completed.returncode != 0 and process.poll() is None:
+                    process.kill()
             else:
                 os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
         except (OSError, ProcessLookupError, subprocess.SubprocessError):
@@ -2250,6 +2492,20 @@ class RunManager:
                 except OSError:
                     pass
             return
+
+    @staticmethod
+    def _wait_for_posix_process_group(process_group_id: int, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            try:
+                os.killpg(process_group_id, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.02)
 
     def shutdown(self, grace_seconds: float = 8.0) -> None:
         with self._lock:
@@ -2268,8 +2524,9 @@ class RunManager:
                         "WHERE id=? AND status IN ('queued','starting','running')",
                         (run_id,),
                     )
-                for _run_id, process in processes:
-                    self._signal_process(process, force=False)
+                for run_id, process in processes:
+                    self._request_cooperative_cancel(run_id)
+                    self._signal_process(run_id, process, force=False)
 
         deadline = time.monotonic() + max(0.0, grace_seconds)
         for thread in threads:
@@ -2283,28 +2540,55 @@ class RunManager:
             remaining_threads = list(self._threads.values())
             for run_id, process in remaining_processes:
                 self._force_killed.add(run_id)
-                self._signal_process(process, force=True)
+                self._signal_process(run_id, process, force=True)
+        containment_deadline = time.monotonic() + 7.0
         for thread in remaining_threads:
-            thread.join(timeout=2)
+            remaining = containment_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
 
         now = utc_now()
+        with self._lock:
+            live_run_ids = tuple(self._threads)
+        live_filter = ""
+        live_parameters: tuple[Any, ...] = ()
+        if live_run_ids:
+            placeholders = ",".join("?" for _ in live_run_ids)
+            live_filter = f" AND id NOT IN ({placeholders})"
+            live_parameters = live_run_ids
         with self.database.transaction() as connection:
             connection.execute(
                 "UPDATE runs SET status='cancelled',finished_at=COALESCE(finished_at,?),"
                 "error=COALESCE(error,'Hub shutdown interrupted this run'),pid=NULL "
-                "WHERE status IN ('queued','starting','running','cancelling')",
-                (now,),
+                "WHERE status IN ('queued','starting','running','cancelling')"
+                + live_filter,
+                (now, *live_parameters),
             )
+            lease_filter = ""
+            if live_run_ids:
+                placeholders = ",".join("?" for _ in live_run_ids)
+                lease_filter = f" WHERE run_id NOT IN ({placeholders})"
             connection.execute(
-                "DELETE FROM account_leases"
+                "DELETE FROM account_leases" + lease_filter,
+                live_parameters,
             )
+            account_live_filter = live_filter.replace("id NOT IN", "run_id NOT IN")
             connection.execute(
                 "UPDATE run_account_states SET status='cancelled',"
                 "stage='hub_shutdown',last_message='Hub завершил работу во время выполнения',"
-                "updated_at=? WHERE status IN ('queued','running')",
-                (now,),
+                "updated_at=? WHERE status IN ('queued','running')"
+                + account_live_filter,
+                (now, *live_parameters),
             )
-            connection.execute("DELETE FROM run_account_pins")
+            pin_filter = ""
+            if live_run_ids:
+                placeholders = ",".join("?" for _ in live_run_ids)
+                pin_filter = f" WHERE run_id NOT IN ({placeholders})"
+            connection.execute(
+                "DELETE FROM run_account_pins" + pin_filter,
+                live_parameters,
+            )
 
     def _current_progress(self, run_id: str) -> float:
         row = self.database.one("SELECT progress FROM runs WHERE id=?", (run_id,))

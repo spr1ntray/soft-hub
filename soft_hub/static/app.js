@@ -32,9 +32,9 @@ const state = {
   drawerRefreshQueued: false,
   drawerRequestGeneration: 0,
   drawerCloseTimer: null,
+  stopRequestRunIds: new Set(),
   refreshing: false,
   refreshPending: false,
-  refreshSpinPending: false,
   refreshPromise: null,
   startupVaultGate: true,
   pendingAfterUnlock: null,
@@ -47,7 +47,6 @@ const state = {
   fileInstallBusy: false,
   focusOrigin: null,
   focusOriginIdentity: null,
-  destructiveRequest: null,
   presentationUrls: new Map(),
   presentationLoads: new Map(),
   presentationFailures: new Map(),
@@ -1055,7 +1054,7 @@ function coreUpdatePresentation(phase, update) {
     idle: {
       stateLabel: 'ГОТОВ К ПРОВЕРКЕ',
       title: 'Проверим, есть ли новая версия',
-      copy: 'Hub сам посмотрит официальный GitHub. Скачивание и установка начнутся только после вашего разрешения.',
+      copy: 'Hub сам посмотрит официальный GitHub. Скачивание начнётся по кнопке, установка — отдельным нажатием.',
       primary: ['check', 'Проверить обновления', 'ink'],
     },
     checking: {
@@ -1074,13 +1073,13 @@ function coreUpdatePresentation(phase, update) {
     available: {
       stateLabel: 'ЕСТЬ ОБНОВЛЕНИЕ',
       title: `Вышла версия ${targetLabel}`,
-      copy: 'Скачаем её с официального GitHub, проверим и установим только после вашего подтверждения.',
+      copy: 'Скачаем её с официального GitHub и проверим. После этого останется нажать «Установить».',
       primary: ['download', `Скачать ${targetLabel}`, 'ink'],
     },
     downloading: {
       stateLabel: 'СКАЧИВАЕМ',
       title: `Скачиваем ${targetLabel}…`,
-      copy: 'Можно продолжать пользоваться Hub. Перед установкой мы отдельно спросим разрешение.',
+      copy: 'Можно продолжать пользоваться Hub. Установка не начнётся, пока вы сами не нажмёте кнопку.',
       primary: ['cancel', 'Отменить загрузку', 'quiet'],
       busy: true,
     },
@@ -1275,20 +1274,6 @@ async function installCoreUpdate(origin) {
     openRunsBlockingCoreUpdate(origin);
     return;
   }
-  const version = state.coreUpdate.availableVersion;
-  const platform = state.data?.app?.platform;
-  const installMessage = platform === 'darwin'
-    ? 'Hub закроется и откроет проверенный DMG. Перетащите Soft Hub в Applications и подтвердите замену. Аккаунты, ключи, софты, история и результаты останутся на месте.'
-    : platform === 'win32'
-      ? 'Hub закроется и запустит проверенный установщик. Завершите установку в открывшемся окне — ваши данные останутся на месте.'
-      : 'Hub закроется и откроет проверенный установщик. Ваши данные останутся на месте.';
-  const confirmed = await requestDestructiveConfirmation({
-    title: `Установить Soft Hub${version ? ` v${version}` : ''}?`,
-    message: installMessage,
-    confirmLabel: platform === 'darwin' ? 'Закрыть Hub и открыть DMG' : 'Запустить установщик',
-    tone: 'update',
-  });
-  if (!confirmed) return;
   await refresh();
   if (Number(state.data?.stats?.active_runs || 0) > 0) {
     openRunsBlockingCoreUpdate(origin);
@@ -2805,6 +2790,10 @@ function activityTableMarkup(rows) {
         ? activityResolutionKind(row, group.filter((candidate) => candidate.run_id === row.run_id))
         : '';
       const activityControlKey = `${row.run_id}:${row.account_id || 'public'}`;
+      const runSnapshot = state.data?.runs?.find((run) => run.id === row.run_id);
+      const stopActionLabel = runSnapshot?.safe_stop === true && row.run_status !== 'cancelling'
+        ? 'Мягко остановить'
+        : 'Остановить принудительно';
       renderedRunActions.add(row.run_id);
       const resolutionControl = resolutionKind === 'review'
         ? `<button class="activity-resolution activity-resolution--review" type="button" data-review-run="${escapeHtml(row.run_id)}" data-activity-control="review:${escapeHtml(row.run_id)}" aria-label="Скрыть ошибку ${escapeHtml(row.module_name)} из текущих уведомлений">${iconMarkup('check')}<span>Скрыть</span></button>`
@@ -2822,7 +2811,7 @@ function activityTableMarkup(rows) {
           <td><span class="activity-progress"><progress max="100" value="${progress}" aria-label="Прогресс ${escapeHtml(row.module_name)} для ${escapeHtml(row.account_label || 'операции')}: ${progress}%">${progress}%</progress><small>${progress}%</small></span></td>
           <td><span class="status-label" data-status="${escapeHtml(row.status)}">${escapeHtml(statusLabel)}</span></td>
           <td><time class="activity-age" datetime="${escapeHtml(updatedAt)}" title="${escapeHtml(fullDateTime(updatedAt))}">${escapeHtml(relativeTime(updatedAt))}</time></td>
-          <td><span class="activity-row-actions"><button class="activity-open-run" type="button" data-open-run="${escapeHtml(row.run_id)}" data-activity-control="details:${escapeHtml(activityControlKey)}" aria-controls="run-drawer" aria-label="Открыть подробный журнал запуска: ${escapeHtml(row.module_name)}, ${escapeHtml(row.account_label || stage)}" title="Открыть подробный журнал">${iconMarkup('search')}</button>${showStop ? `<button class="activity-stop-run" type="button" data-request-run-stop="${escapeHtml(row.run_id)}" data-activity-control="stop:${escapeHtml(row.run_id)}" aria-label="Открыть безопасную остановку запуска ${escapeHtml(row.module_name)}">${iconMarkup('stop')}</button>` : ''}${resolutionControl}</span></td>
+          <td><span class="activity-row-actions"><button class="activity-open-run" type="button" data-open-run="${escapeHtml(row.run_id)}" data-activity-control="details:${escapeHtml(activityControlKey)}" aria-controls="run-drawer" aria-label="Открыть подробный журнал запуска: ${escapeHtml(row.module_name)}, ${escapeHtml(row.account_label || stage)}" title="Открыть подробный журнал">${iconMarkup('search')}</button>${showStop ? `<button class="activity-stop-run" type="button" data-request-run-stop="${escapeHtml(row.run_id)}" data-activity-control="stop:${escapeHtml(row.run_id)}" aria-label="${stopActionLabel} ${escapeHtml(row.module_name)}" title="${stopActionLabel}">${iconMarkup('stop')}</button>` : ''}${resolutionControl}</span></td>
         </tr>`;
     }).join('');
   }).join('');
@@ -3039,7 +3028,7 @@ async function refreshActivityPanel() {
   setBusy(button, true, 'Обновляем…');
   $('#activity-panel').setAttribute('aria-busy', 'true');
   try {
-    await refresh({ spin: true });
+    await refresh();
     await loadActivityAccounts();
   } finally {
     setBusy(button, false);
@@ -3047,12 +3036,9 @@ async function refreshActivityPanel() {
 }
 
 async function openRunStopFlow(runId) {
+  const stopPromise = requestRunStop(runId, 'auto');
   await openRunDrawer(runId);
-  if (state.selectedRunId !== runId) return;
-  const safeStop = $('#drawer-stop');
-  const forceStop = $('#drawer-force-stop');
-  const target = !safeStop.hidden ? safeStop : forceStop;
-  target?.focus({ preventScroll: true });
+  await stopPromise;
 }
 
 const RESULT_REPORT_ATTENTION_STATUSES = new Set(['failed', 'blocked', 'needs_attention', 'unknown']);
@@ -3348,7 +3334,7 @@ function resultReportSystemMetrics(report, rows) {
     : rows.filter((row) => !resultReportRowHasData(row)).length;
   return [
     { title: 'Кошельков в запуске', value: total, note: 'вся выбранная пачка', accent: 'tangerine' },
-    { title: 'Успешно', value: succeeded, note: 'подтверждено lifecycle', accent: 'teal' },
+    { title: 'Успешно', value: succeeded, note: 'завершено по lifecycle', accent: 'teal' },
     { title: 'Частично', value: partial, note: 'есть полезный результат', accent: 'butter' },
     {
       title: 'С ошибками',
@@ -3708,17 +3694,13 @@ function renderAll() {
   }
 }
 
-function refresh(options = {}) {
+function refresh() {
   state.refreshPending = true;
-  state.refreshSpinPending = state.refreshSpinPending || options.spin === true;
   if (state.refreshPromise) return state.refreshPromise;
   state.refreshing = true;
-  const button = $('#refresh-button');
   const drain = async () => {
     while (state.refreshPending) {
       state.refreshPending = false;
-      if (state.refreshSpinPending) button.classList.add('is-spinning');
-      state.refreshSpinPending = false;
       const activeBeforeRender = document.activeElement;
       const activeIdentity = focusIdentity(activeBeforeRender);
       const protectedDataEpoch = state.protectedDataEpoch;
@@ -3763,55 +3745,11 @@ function refresh(options = {}) {
   promise = drain().finally(() => {
     state.refreshing = false;
     if (state.refreshPromise === promise) state.refreshPromise = null;
-    button.classList.remove('is-spinning');
     if (state.refreshPending) return refresh();
     return undefined;
   });
   state.refreshPromise = promise;
   return promise;
-}
-
-function requestDestructiveConfirmation({ title, message, confirmLabel, phrase = '', tone = 'danger' }) {
-  if (state.destructiveRequest) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    state.destructiveRequest = { resolve, phrase };
-    const modal = $('#destructive-modal');
-    const submit = $('#destructive-submit');
-    modal.dataset.tone = tone === 'update' ? 'update' : 'danger';
-    $('#destructive-modal-title').textContent = title;
-    $('#destructive-modal-copy').textContent = message;
-    submit.textContent = confirmLabel;
-    submit.classList.toggle('button--danger', tone !== 'update');
-    submit.classList.toggle('button--ink', tone === 'update');
-    $('#destructive-phrase-label').hidden = !phrase;
-    $('#destructive-phrase').required = Boolean(phrase);
-    $('#destructive-phrase').value = '';
-    $('#destructive-phrase-copy').textContent = phrase ? `Для подтверждения введите: ${phrase}` : '';
-    $('#destructive-error').hidden = true;
-    openModal('destructive-modal');
-  });
-}
-
-function settleDestructiveConfirmation(accepted) {
-  const request = state.destructiveRequest;
-  if (!request) return;
-  state.destructiveRequest = null;
-  closeModals(false);
-  request.resolve(accepted);
-}
-
-function handleDestructiveSubmit(event) {
-  event.preventDefault();
-  const request = state.destructiveRequest;
-  if (!request) return;
-  const value = $('#destructive-phrase').value.trim();
-  if (request.phrase && value !== request.phrase) {
-    $('#destructive-error').textContent = `Введите фразу точно: ${request.phrase}`;
-    $('#destructive-error').hidden = false;
-    $('#destructive-phrase').focus();
-    return;
-  }
-  settleDestructiveConfirmation(true);
 }
 
 function openModal(id) {
@@ -3837,10 +3775,6 @@ function dismissModals() {
   }
   if (state.startupVaultGate && !$('#vault-modal').hidden) {
     $('#vault-password').focus();
-    return;
-  }
-  if (state.destructiveRequest && !$('#destructive-modal').hidden) {
-    settleDestructiveConfirmation(false);
     return;
   }
   state.pendingAfterUnlock = null;
@@ -3903,7 +3837,6 @@ function purgeProtectedClientState() {
   state.resultReportFilterTimer = null;
   closeActivityPanel({ restoreFocus: false, immediate: true });
   closeRunDrawer({ restoreFocus: false, immediate: true });
-  if (state.destructiveRequest) settleDestructiveConfirmation(false);
   closeModals(true, true);
   $('#account-search').value = '';
   $('#result-report-search').value = '';
@@ -3924,8 +3857,6 @@ function purgeProtectedClientState() {
   $('#run-launch-summary').textContent = 'Разблокируйте Vault, чтобы выбрать аккаунты.';
   $('#run-error').textContent = '';
   $('#batch-run-error').textContent = '';
-  $('#destructive-modal-title').textContent = '';
-  $('#destructive-modal-copy').textContent = '';
   $('#toast-region').replaceChildren();
   if (state.data) {
     state.data = {
@@ -4146,7 +4077,6 @@ function openExportModal() {
 async function handleExportSubmit(event) {
   event.preventDefault();
   const passwordInput = $('#export-password');
-  const acknowledgementInput = $('#export-acknowledgement');
   const formatInput = $('#export-format');
   const error = $('#export-error');
   const submit = $('#export-submit');
@@ -4162,12 +4092,10 @@ async function handleExportSubmit(event) {
       },
       body: JSON.stringify({
         password: passwordInput.value,
-        acknowledgement: acknowledgementInput.value,
         format,
       }),
     });
     passwordInput.value = '';
-    acknowledgementInput.value = '';
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || `HTTP ${response.status}`);
@@ -4222,12 +4150,6 @@ async function saveCapsolver(event) {
 }
 
 async function clearCapsolver() {
-  const confirmed = await requestDestructiveConfirmation({
-    title: 'Удалить API-ключ Capsolver?',
-    message: 'Ключ будет удалён из Vault. Софты с Capsolver не запустятся, пока вы не сохраните новый ключ.',
-    confirmLabel: 'Удалить ключ',
-  });
-  if (!confirmed) return;
   const button = $('#capsolver-clear');
   setBusy(button, true, 'Удаляем…');
   try {
@@ -4266,12 +4188,6 @@ async function saveAdsPower(event) {
 }
 
 async function clearAdsPower() {
-  const confirmed = await requestDestructiveConfirmation({
-    title: 'Удалить API-ключ AdsPower?',
-    message: 'Ключ будет удалён из Vault. Софты с AdsPower не запустятся, пока вы не сохраните новый ключ.',
-    confirmLabel: 'Удалить ключ',
-  });
-  if (!confirmed) return;
   const button = $('#adspower-clear');
   setBusy(button, true, 'Удаляем…');
   try {
@@ -4450,7 +4366,7 @@ function renderRunRequirements(action) {
   let actionButton = '';
   if (missingSettings.length) {
     warning = `Перед запуском добавьте ${resourceNames(missingSettings, settingResourceNames)}.`;
-    actionButton = '<button class="text-button" type="button" data-resource-settings>Открыть настройки</button>';
+    actionButton = '<button class="text-button" type="button" data-resource-connections>Открыть аккаунты</button>';
   } else if (unavailableAccounts.length) {
     const topologyMissing = unavailableAccounts.some((account) => referralAccountIssue(account, action));
     warning = `${unavailableAccounts.length} ${countWord(unavailableAccounts.length, 'аккаунт недоступен', 'аккаунта недоступны', 'аккаунтов недоступны')}: ${topologyMissing ? 'не хватает связи с пригласившим или его данных' : 'не хватает обязательных данных'}.`;
@@ -4460,11 +4376,14 @@ function renderRunRequirements(action) {
   }
   root.innerHTML = `<div class="run-requirements-head"><span><strong>Перед запуском</strong><small>Проверим всё заранее</small></span>${warning ? '<i data-state="warning">НУЖНО ДОПОЛНИТЬ</i>' : '<i data-state="ready">ВСЁ ГОТОВО</i>'}</div><div class="resource-chip-list">${chips}</div>${warning ? `<div class="resource-warning" role="status"><span>${escapeHtml(warning)}</span>${actionButton}</div>` : ''}`;
   root.hidden = false;
-  $('[data-resource-settings]', root)?.addEventListener('click', () => {
+  $('[data-resource-connections]', root)?.addEventListener('click', () => {
     closeModals(true, true);
-    showView('settings');
+    showView('accounts');
     const target = $(missingSettings[0] === 'capsolver' ? '#capsolver-key' : '#adspower-key');
-    window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
+    window.requestAnimationFrame(() => {
+      target.closest('.account-capability')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target.focus({ preventScroll: true });
+    });
   });
   $('[data-resource-import]', root)?.addEventListener('click', () => {
     const module = selectedRunModule();
@@ -4508,7 +4427,7 @@ function actionRiskLabel(action) {
 }
 
 function actionReadyNote(action) {
-  if (action?.risk === 'testnet_write') return 'Понадобится общее подтверждение testnet-запуска';
+  if (action?.risk === 'testnet_write') return 'Может подписывать тестовые транзакции и расходовать тестовый газ';
   if (action?.risk === 'external_write') return 'Изменит данные во внешнем сервисе';
   return 'Готово к запуску';
 }
@@ -4806,7 +4725,7 @@ function optionFieldMarkup(key, field, required) {
     const minimum = field.minLength !== undefined ? `${field.minLength}–` : 'до ';
     helpParts.push(`${minimum}${field.maxLength} символов`);
   }
-  if (field.default !== undefined) helpParts.push(`Сейчас стоит: ${optionValueLabel(field.default)}${unit ? ` ${unit}` : ''}`);
+  if (field.default !== undefined) helpParts.push(`По умолчанию: ${optionValueLabel(field.default)}${unit ? ` ${unit}` : ''}`);
   const help = helpParts.length ? helpParts.join(' · ') : 'Эта настройка действует только для текущего запуска.';
 
   if (type === 'boolean') {
@@ -4972,16 +4891,6 @@ function updateRunForm({ applyAccountDefault = false } = {}) {
   renderRunAccounts(action, selectedIds);
   state.lastRunActionId = action.id;
   $('#run-accounts-block').hidden = action.account_mode === 'none';
-  $('#risk-confirmation').hidden = action.risk !== 'testnet_write';
-  $('#mainnet-confirmation').hidden = action.risk !== 'mainnet_write';
-  $('#risk-checkbox').checked = false;
-  $('#risk-checkbox').removeAttribute('aria-invalid');
-  const phrase = action.confirmation_phrase || '';
-  $('#mainnet-phrase').value = '';
-  $('#mainnet-phrase').placeholder = phrase;
-  $('#mainnet-phrase').required = action.risk === 'mainnet_write';
-  $('#mainnet-phrase').removeAttribute('aria-invalid');
-  $('#mainnet-confirmation').firstChild.textContent = phrase ? `Введите: ${phrase}` : 'Фраза подтверждения';
   syncRunConcurrency(action, { reset: actionChanged });
   renderRunOptions(action);
   updateRunAccountSelection({ applyDefault: applyAccountDefault });
@@ -5110,31 +5019,6 @@ async function handleRunSubmit(event) {
     $('#run-requirements').focus?.({ preventScroll: true });
     return;
   }
-  let acknowledgement = '';
-  if (action.risk === 'testnet_write') {
-    if (!$('#risk-checkbox').checked) {
-      error.textContent = 'Подтвердите testnet-запуск';
-      error.hidden = false;
-      $('#risk-checkbox').setAttribute('aria-invalid', 'true');
-      $('#risk-checkbox').focus();
-      return;
-    }
-    $('#risk-checkbox').removeAttribute('aria-invalid');
-    acknowledgement = 'TESTNET';
-  } else if (action.risk === 'mainnet_write') {
-    const confirmation = $('#mainnet-phrase');
-    acknowledgement = confirmation.value.trim();
-    if (acknowledgement !== action.confirmation_phrase) {
-      error.textContent = `Введите фразу подтверждения точно: ${action.confirmation_phrase}`;
-      error.hidden = false;
-      confirmation.setAttribute('aria-invalid', 'true');
-      confirmation.focus();
-      return;
-    }
-    confirmation.removeAttribute('aria-invalid');
-  } else if (action.confirmation_phrase) {
-    acknowledgement = action.confirmation_phrase;
-  }
   const submit = $('#run-submit');
   setBusy(submit, true, 'Добавляем в очередь…');
   try {
@@ -5142,7 +5026,6 @@ async function handleRunSubmit(event) {
       action_id: action.id,
       account_ids: accountIds,
       options: collectOptions(),
-      acknowledgement,
     });
     closeModals();
     await refresh();
@@ -5394,10 +5277,11 @@ async function updateDrawer() {
     }
     const active = ['queued', 'starting', 'running', 'cancelling'].includes(run.status);
     const safeStop = run.safe_stop === true;
+    const stopPending = state.stopRequestRunIds.has(runId);
     $('#drawer-stop').hidden = !active || !safeStop || run.status === 'cancelling';
-    $('#drawer-stop').disabled = false;
+    $('#drawer-stop').disabled = stopPending;
     $('#drawer-force-stop').hidden = !active;
-    $('#drawer-force-stop').disabled = false;
+    $('#drawer-force-stop').disabled = stopPending;
     $('#drawer-stop-note').hidden = !active || safeStop;
     $('#drawer-stop-note').textContent = safeStop
       ? ''
@@ -5428,20 +5312,42 @@ async function updateDrawer() {
   }
 }
 
-async function stopSelectedRun() {
-  if (!state.selectedRunId) return;
-  const button = $('#drawer-stop');
-  setBusy(button, true, 'Останавливаем…');
+async function requestRunStop(runId, mode, button = null) {
+  const requestedRunId = String(runId || '');
+  if (!requestedRunId || state.stopRequestRunIds.has(requestedRunId)) return;
+  state.stopRequestRunIds.add(requestedRunId);
+  if (button) setBusy(button, true, mode === 'force' ? 'Завершаем…' : 'Останавливаем…');
   try {
-    await jsonPost(`/api/runs/${encodeURIComponent(state.selectedRunId)}/stop`);
-    toast('Софт получил запрос на мягкую остановку.');
-    await updateDrawer();
+    let resolvedMode = mode;
+    if (mode === 'auto') {
+      const run = await api(`/api/runs/${encodeURIComponent(requestedRunId)}`);
+      if (!ACTIVE_RUN_STATUSES.has(run.status)) {
+        toast('Запуск уже завершён.');
+        return;
+      }
+      resolvedMode = run.safe_stop === true && run.status !== 'cancelling' ? 'soft' : 'force';
+    }
+    if (resolvedMode === 'soft') {
+      await jsonPost(`/api/runs/${encodeURIComponent(requestedRunId)}/stop`, {});
+      toast('Софт получил запрос на мягкую остановку.');
+    } else {
+      await jsonPost(`/api/runs/${encodeURIComponent(requestedRunId)}/force-stop`, {});
+      toast('Принудительная остановка запущена. Hub дождётся завершения всего дерева процессов и освободит аккаунты.', 'success', 6200);
+    }
+    await refresh();
   } catch (error) {
-    toast(error.message, 'error');
+    toast(error.message, 'error', 7000);
   } finally {
-    setBusy(button, false);
-    await updateDrawer();
+    state.stopRequestRunIds.delete(requestedRunId);
+    if (button?.isConnected) setBusy(button, false);
+    if (state.selectedRunId === requestedRunId) await updateDrawer();
   }
+}
+
+async function stopSelectedRun() {
+  const runId = state.selectedRunId;
+  if (!runId) return;
+  await requestRunStop(runId, 'soft', $('#drawer-stop'));
 }
 
 function logDownloadFilename(response, runId) {
@@ -5490,29 +5396,9 @@ async function downloadSelectedRunLog() {
 }
 
 async function forceStopSelectedRun() {
-  if (!state.selectedRunId) return;
-  const snapshot = state.selectedRunSnapshot;
-  const confirmed = await requestDestructiveConfirmation({
-    title: 'Остановить софт принудительно?',
-    message: snapshot?.status === 'queued'
-      ? 'Уберём задачу из очереди — процесс ещё не запущен.'
-      : 'Hub сразу завершит весь процесс. Журнал останется в истории, а аккаунты сразу освободятся для следующего запуска.',
-    confirmLabel: 'Остановить принудительно',
-    phrase: 'FORCE STOP',
-  });
-  if (!confirmed || !state.selectedRunId) return;
-  const button = $('#drawer-force-stop');
-  setBusy(button, true, 'Завершаем…');
-  try {
-    await jsonPost(`/api/runs/${encodeURIComponent(state.selectedRunId)}/force-stop`, { acknowledgement: 'FORCE STOP' });
-    toast('Процесс остановлен. Аккаунты освободятся сразу после завершения процесса.', 'success', 5600);
-    await refresh();
-  } catch (error) {
-    toast(error.message, 'error', 7000);
-  } finally {
-    setBusy(button, false);
-    await updateDrawer();
-  }
+  const runId = state.selectedRunId;
+  if (!runId) return;
+  await requestRunStop(runId, 'force', $('#drawer-force-stop'));
 }
 
 async function applyAttentionResolution(resolvedRun) {
@@ -5661,12 +5547,6 @@ async function deleteModule(moduleId, button) {
     openActivityPanel('active', button);
     return;
   }
-  const confirmed = await requestDestructiveConfirmation({
-    title: `Удалить ${moduleDisplayName(module)}?`,
-    message: 'Удалим код, все версии и рабочее окружение. Запуски и результаты останутся в Hub.',
-    confirmLabel: 'Удалить софт',
-  });
-  if (!confirmed) return;
   setBusy(button, true, 'Удаляем…');
   try {
     const result = await api(`/api/modules/${encodeURIComponent(moduleId)}`, { method: 'DELETE' });
@@ -5687,13 +5567,6 @@ async function deleteModule(moduleId, button) {
 async function deleteAccount(accountId) {
   const account = state.data.accounts.find((item) => item.id === accountId);
   if (!account) return;
-  const childCount = Number(account.referral_children_count || 0);
-  const confirmed = await requestDestructiveConfirmation({
-    title: `Удалить аккаунт ${account.label}?`,
-    message: `Из Vault удалятся приватник, прокси, почта, Twitter и ID профиля AdsPower. История запусков останется.${childCount ? ` Его ${childCount} ${countWord(childCount, 'реферал станет', 'реферала станут', 'рефералов станут')} корневыми аккаунтами без пригласившего.` : ''}`,
-    confirmLabel: 'Удалить аккаунт',
-  });
-  if (!confirmed) return;
   try {
     await api(`/api/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' });
     await refresh();
@@ -5868,7 +5741,6 @@ function renderBatchRunList() {
 
 function updateBatchPreflight() {
   let blocked = false;
-  let hasTestnet = false;
   $$('[data-batch-row]').forEach((row) => {
     const module = state.data.modules.find((item) => item.id === row.dataset.batchRow);
     const select = $('[data-batch-action]', row);
@@ -5880,10 +5752,7 @@ function updateBatchPreflight() {
     note.dataset.state = issue ? 'blocked' : 'ready';
     note.textContent = issue || actionReadyNote(action);
     blocked ||= Boolean(issue);
-    hasTestnet ||= action?.risk === 'testnet_write';
   });
-  $('#batch-testnet-confirmation').hidden = !hasTestnet;
-  if (!hasTestnet) $('#batch-risk-checkbox').checked = false;
   syncBatchConcurrency();
   $('#batch-run-submit').disabled = blocked || state.batchModuleIds.size === 0;
   $('#batch-run-error').hidden = true;
@@ -5946,12 +5815,6 @@ async function handleBatchRunSubmit(event) {
       error.hidden = false;
       return;
     }
-    if (action.risk === 'testnet_write' && !$('#batch-risk-checkbox').checked) {
-      error.textContent = 'Подтвердите testnet-запуски в этой пачке';
-      error.hidden = false;
-      $('#batch-risk-checkbox').focus();
-      return;
-    }
     const accountIds = action.account_mode === 'none'
       ? []
       : policy === 'first' ? allAccountIds.slice(0, 1) : allAccountIds;
@@ -5963,7 +5826,6 @@ async function handleBatchRunSubmit(event) {
         accountCount: accountIds.length,
         requestedConcurrency,
       }),
-      acknowledgement: action.risk === 'testnet_write' ? 'TESTNET' : '',
     });
   }
   const submit = $('#batch-run-submit');
@@ -6019,15 +5881,6 @@ function openAttentionRun(origin) {
   toggleActivityPanel('attention', origin);
 }
 
-async function confirmVaultLock() {
-  const confirmed = await requestDestructiveConfirmation({
-    title: 'Заблокировать Vault?',
-    message: 'Пока Vault закрыт, новые запуски с секретами недоступны. Уже работающие софты продолжат работу с выданными данными.',
-    confirmLabel: 'Заблокировать',
-  });
-  if (confirmed) await lockVault();
-}
-
 function handleQuickAction(action, origin = document.activeElement) {
   if (action === 'run') openQuickRun();
   else if (action === 'batch') openBatchRunModal();
@@ -6037,7 +5890,7 @@ function handleQuickAction(action, origin = document.activeElement) {
   else if (action === 'patch') $('#plugin-file-input').click();
   else if (action === 'vault') {
     if (state.data?.vault.unlocked) {
-      void confirmVaultLock();
+      void lockVault();
     } else {
       openVaultModal();
     }
@@ -6054,7 +5907,6 @@ function bindEvents() {
     showView(button.dataset.viewTrigger);
   }));
   bindInstallTriggers();
-  $('#refresh-button').addEventListener('click', () => refresh({ spin: true }));
   $('#result-report-refresh').addEventListener('click', () => loadResultReports({ force: true }));
   $('#result-report-select').addEventListener('change', (event) => loadSelectedResultReport(event.currentTarget.value));
   $('#result-report-search').addEventListener('input', scheduleResultReportFilterRender);
@@ -6151,12 +6003,6 @@ function bindEvents() {
     updateRunAccountSelection();
   });
   $('#run-account-concurrency').addEventListener('change', () => updateRunAccountSelection());
-  $('#risk-checkbox').addEventListener('change', (event) => {
-    if (event.currentTarget.checked) event.currentTarget.removeAttribute('aria-invalid');
-  });
-  $('#mainnet-phrase').addEventListener('input', (event) => {
-    event.currentTarget.removeAttribute('aria-invalid');
-  });
   $('#batch-run-form').addEventListener('submit', handleBatchRunSubmit);
   $('#batch-account-policy').addEventListener('change', () => {
     state.batchIdempotencyKey = null;
@@ -6196,8 +6042,6 @@ function bindEvents() {
     renderSoftware();
     renderCatalogWorkspaces();
   });
-  $('#destructive-form').addEventListener('submit', handleDestructiveSubmit);
-  $('#destructive-cancel').addEventListener('click', () => settleDestructiveConfirmation(false));
   ['#import-table', '#import-keys', '#import-proxies', '#import-emails', '#import-twitters', '#import-adspower-profiles'].forEach((selector) => $(selector).addEventListener('input', updateImportCount));
   $('#accounts-file-button').addEventListener('click', () => $('#accounts-file-input').click());
   $('#accounts-file-input').addEventListener('change', async () => {
@@ -6326,7 +6170,7 @@ function bindEvents() {
         input.focus();
       }
     }
-    if (target.dataset.requestRunStop) openRunStopFlow(target.dataset.requestRunStop);
+    if (target.dataset.requestRunStop) void openRunStopFlow(target.dataset.requestRunStop);
     if (target.dataset.reviewRun) reviewRunAttention(target.dataset.reviewRun, target);
     if (target.dataset.prepareModule) prepareModule(target.dataset.prepareModule, target);
     if (target.dataset.installPatch) installPatchAsset(target.dataset.installPatch, target);

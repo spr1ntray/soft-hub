@@ -10,6 +10,8 @@ let hubUrl;
 let startupTimer;
 let hubStopPromise;
 let hubUpdater;
+let quitAfterCoreStop = false;
+let quitRequested = false;
 
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
@@ -90,12 +92,6 @@ async function stopHubAndWait() {
       reject(new Error('Ядро Soft Hub не завершилось вовремя.'));
     };
     processToStop.once('exit', finish);
-    try {
-      processToStop.kill('SIGTERM');
-    } catch {
-      finish();
-      return;
-    }
     forceTimer = setTimeout(() => {
       if (processToStop.exitCode === null) {
         try { processToStop.kill('SIGKILL'); } catch { /* Process already exited. */ }
@@ -105,8 +101,28 @@ async function stopHubAndWait() {
         else finish();
       }, 2_000);
       finalTimer.unref();
-    }, 14_000);
+    }, 18_000);
     forceTimer.unref();
+    void (async () => {
+      let cooperative = false;
+      if (hubUrl) {
+        try {
+          await hubApi('/api/system/shutdown', { method: 'POST', body: '{}' });
+          cooperative = true;
+        } catch {
+          // Fall back to the OS primitive below when the local API is already
+          // unavailable.  Normal desktop shutdown uses the cooperative path so
+          // Windows can close every plugin Job Object before the core exits.
+        }
+      }
+      if (processToStop.exitCode !== null) {
+        finish();
+        return;
+      }
+      if (!cooperative) {
+        try { processToStop.kill('SIGTERM'); } catch { finish(); }
+      }
+    })();
   }).finally(() => {
     hubStopPromise = null;
   });
@@ -212,23 +228,6 @@ function broadcastUpdaterState(state) {
   mainWindow.webContents.send(updaterRuntime.UPDATE_IPC.stateChanged, state);
 }
 
-async function confirmUpdateInstall(state) {
-  const platformInstruction = process.platform === 'darwin'
-    ? 'После открытия DMG замените Soft Hub в Applications.'
-    : 'Откроется обычный установщик Windows и поставит версию поверх текущей.';
-  const result = await dialog.showMessageBox(mainWindow, {
-    type: 'info',
-    title: 'Обновить Soft Hub',
-    message: `Установить Soft Hub ${state.availableVersion}?`,
-    detail: `${platformInstruction}\n\nVault, аккаунты, софты и история лежат отдельно и останутся на месте.`,
-    buttons: ['Открыть установщик', 'Не сейчас'],
-    defaultId: 0,
-    cancelId: 1,
-    noLink: true,
-  });
-  return result.response === 0;
-}
-
 async function openVerifiedInstaller(installerPath) {
   const error = await shell.openPath(installerPath);
   if (error) throw new Error('Операционная система не смогла открыть установщик.');
@@ -264,7 +263,10 @@ function setupUpdater() {
     enabled: app.isPackaged,
     onStateChange: broadcastUpdaterState,
     getActiveRuns: activeRunsForUpdate,
-    confirmInstall: confirmUpdateInstall,
+    // The renderer's install button is the user's explicit instruction.  Keep
+    // the updater's race, checksum and active-run checks, but do not ask for a
+    // second confirmation in a native dialog.
+    confirmInstall: async () => true,
     lockVault: lockVaultForUpdate,
     stopCore: stopHubAndWait,
     openInstaller: openVerifiedInstaller,
@@ -444,8 +446,19 @@ if (singleInstance) {
     if (mainWindow) mainWindow.focus();
     else void createWindow();
   });
-  app.on('before-quit', () => {
-    stopHub();
+  app.on('before-quit', (event) => {
+    if (quitAfterCoreStop) return;
+    event.preventDefault();
+    if (quitRequested) return;
+    quitRequested = true;
+    void stopHubAndWait()
+      .catch((error) => {
+        console.error('[soft-hub-core] shutdown failed', error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        quitAfterCoreStop = true;
+        app.quit();
+      });
   });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
